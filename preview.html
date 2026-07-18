@@ -240,7 +240,7 @@
     <button class="btn ghost" onclick="openCashModal()">💴 現金売上を取込</button>
     <button class="btn ghost" onclick="prepareMonth()">🔁 定期費目をセット</button>
     <button class="btn ghost" onclick="openBulkModal()">📅 先の月へ一括計上</button>
-    <button class="btn" onclick="setupAutoPrep()">🕘 毎月1日の自動セットをON</button>
+    <button class="btn" onclick="setupAutoPrep()">🕘 毎月の自動処理をON</button>
     <button class="btn" onclick="writeCheckSheet()">📄 チェック表をシートに書き出す</button>
   </div>
 
@@ -393,7 +393,7 @@
     ],['ガス料金'],[],{'2026-03':{s:12511491},'2026-04':{s:10491876,p:1},'2026-05':{s:11220450}},null)
   ];}
   var ROLE='本部',NAME='本部';
-  function dash(){var st=stores();if(st[0]){st[0].detail.salesCheck={source:st[0].detail.sales,entered:st[0].detail.sales,diff:0,salesName:st[0].name};}if(st[1]){st[1].detail.salesCheck={source:st[1].detail.sales+120000,entered:st[1].detail.sales,diff:-120000,salesName:st[1].name};}return {ver:'v5.1（プレビュー）',user:{name:NAME,role:ROLE},month:TARGET,monthLabel:'2026年6月',
+  function dash(){var st=stores();if(st[0]){st[0].detail.salesCheck={source:st[0].detail.sales,entered:st[0].detail.sales,diff:0,salesName:st[0].name};}if(st[1]){st[1].detail.salesCheck={source:st[1].detail.sales+120000,entered:st[1].detail.sales,diff:-120000,salesName:st[1].name};}return {ver:'v5.2（プレビュー）',user:{name:NAME,role:ROLE},month:TARGET,monthLabel:'2026年6月',
     months:MONTHS,stores:ROLE==='本部'?st:st.slice(0,1),
     corps:{'株式会社FAMDining':{account:'三井住友 渋谷 普通 1234567',note:''},'株式会社MostFun':{account:'',note:''}},
     kubunOptions:['売上','変動費','固定ロイヤリティ','変動ロイヤリティ','固定調整'],taxOptions:['10%','8%','対象外'],

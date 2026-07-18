@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.1';
+var SD_VERSION = 'v5.2';
 var SD_START_MONTH = '2026-03'; // これより前の月はプルダウンに出さない
 var SD_PAID_SHEET = '振込管理_精算ダッシュボード';
 var SD_CORP_SHEET = '法人設定_精算ダッシュボード';
@@ -976,6 +976,13 @@ function sd_cashPreview(token, monthKey) {
 
 function sd_cashApply(token, monthKey, storeNames) {
   var user = sd_auth_(token, true);
+  return sd_cashApplyCore_(monthKey, storeNames, user.name, false);
+}
+
+/* 現金売上の取込コア（手動API・自動トリガーの両方から使用）。
+ * storeNames が null の場合は全店舗を対象にする。
+ * skipIfExists=true のときは、既に現金売上が入っている月・店舗はスキップ（自動取込の二重登録防止）。 */
+function sd_cashApplyCore_(monthKey, storeNames, editorName, skipIfExists) {
   var lock = LockService.getDocumentLock();
   lock.waitLock(20000);
   try {
@@ -986,15 +993,21 @@ function sd_cashApply(token, monthKey, storeNames) {
     var d = sd_monthKeyToDate_(monthKey);
     var results = [];
     cfg.forEach(function (st) {
-      if (storeNames.indexOf(st.name) < 0) return;
+      if (storeNames && storeNames.indexOf(st.name) < 0) return;
       if (!st.db) { results.push(st.name + ': DBシート未検出'); return; }
+      if (skipIfExists) {
+        var exists = sd_readRows_(st.db).some(function (r) {
+          return r.ym === monthKey && sd_norm_(r.kubun) === '売上' && sd_norm_(r.item).indexOf('現金売上') > -1;
+        });
+        if (exists) { results.push(st.name + ': 既に現金売上あり（スキップ）'); return; }
+      }
       var amt = sums[sd_norm_(st.salesName)];
       if (amt == null) { results.push(st.name + ': 売上シートにデータなし'); return; }
       var item = (d.getMonth() + 1) + '月現金売上';
       sd_appendRows_(st.db, d, [{
         kubun: '売上', item: item, amount: amt, tax: '10%',
         note: '分析_日別店舗より自動取込'
-      }], user.name);
+      }], editorName);
       sd_clearRowsCache_(st.db.sheet);
       results.push(st.name + ': ¥' + amt.toLocaleString() + ' を登録');
     });
@@ -1466,22 +1479,28 @@ function sd_recurRows_() {
 
 /* 自動処理のセットアップ:
  *  - 毎月1日 9時: 精算対象月（＝前月）の定期費目を自動セット
+ *  - 毎月5日 9時: 前月分の現金売上を自動取込
  *  - 毎月18日 9時: 振込期限（20日）前のリマインドを本部メールへ送信 */
 function sd_setupAutoPrep(token) {
   sd_auth_(token, true);
   var triggers = ScriptApp.getProjectTriggers();
   var hasPrep = triggers.some(function (t) { return t.getHandlerFunction() === 'sd_autoPrepTick'; });
+  var hasCash = triggers.some(function (t) { return t.getHandlerFunction() === 'sd_cashAutoTick'; });
   var hasRemind = triggers.some(function (t) { return t.getHandlerFunction() === 'sd_remindTick'; });
   var made = [];
   if (!hasPrep) {
     ScriptApp.newTrigger('sd_autoPrepTick').timeBased().onMonthDay(1).atHour(9).create();
     made.push('毎月1日9時 定期費目セット');
   }
+  if (!hasCash) {
+    ScriptApp.newTrigger('sd_cashAutoTick').timeBased().onMonthDay(5).atHour(9).create();
+    made.push('毎月5日9時 現金売上の自動取込');
+  }
   if (!hasRemind) {
     ScriptApp.newTrigger('sd_remindTick').timeBased().onMonthDay(18).atHour(9).create();
     made.push('毎月18日9時 振込期限リマインド');
   }
-  return { ok: true, message: made.length ? made.join('＋') + ' を設定しました' : '自動処理は設定済みです（毎月1日 定期費目セット／毎月18日 リマインド）' };
+  return { ok: true, message: made.length ? made.join('＋') + ' を設定しました' : '自動処理は設定済みです（毎月1日 定期費目セット／毎月5日 現金売上取込／毎月18日 リマインド）' };
 }
 
 function sd_autoPrepTick() {
@@ -1489,6 +1508,18 @@ function sd_autoPrepTick() {
   var monthKey = sd_fmtMonth_(new Date(now.getFullYear(), now.getMonth() - 1, 1));
   var res = sd_prepareMonthCore_(monthKey, '自動(毎月1日)');
   sd_log_('定期費目自動セット', '全店舗', monthKey, res.results.join(' / '), '', '', '自動', '');
+}
+
+/* 毎月5日: 前月分の現金売上を全店舗に自動取込（既に現金売上が入っている店舗はスキップ） */
+function sd_cashAutoTick() {
+  var now = new Date();
+  var monthKey = sd_fmtMonth_(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+  try {
+    var res = sd_cashApplyCore_(monthKey, null, '自動(毎月5日)', true);
+    sd_log_('現金売上自動取込', '全店舗', monthKey, res.results.join(' / '), '', '', '自動', '');
+  } catch (e) {
+    sd_log_('現金売上自動取込エラー', '全店舗', monthKey, String((e && e.message) || e), '', '', '自動', '');
+  }
 }
 
 /* 毎月18日: 振込期限（20日）前のリマインド。入力漏れ疑い・未発行の店舗をまとめて本部へ送信 */
