@@ -15,7 +15,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v4.2';
+var SD_VERSION = 'v4.3';
 var SD_START_MONTH = '2026-03'; // これより前の月はプルダウンに出さない
 var SD_PAID_SHEET = '振込管理_精算ダッシュボード';
 var SD_CORP_SHEET = '法人設定_精算ダッシュボード';
@@ -365,6 +365,9 @@ function sd_setPaid(token, store, monthKey, done, sendMail) {
       + '■対象店舗：' + store + '\n'
       + amountLine
       + '\nご査収のほど、よろしくお願い申し上げます。';
+    if (ext['ダッシュボードURL']) {
+      body += '\n\n──────────────────\n■ 精算ダッシュボード（過去分の精算書もこちらでご確認いただけます）\n' + ext['ダッシュボードURL'];
+    }
     var opts = { name: sender };
     if (ms.cc) opts.cc = ms.cc;
     GmailApp.sendEmail(ms.to, subject, body, opts);
@@ -428,7 +431,8 @@ function sd_extConfig_() {
     ['発行元_電話', '080-5379-7126'],
     ['発行元_登録番号', 'T5011001118040'],
     ['発行元_振込先', ''],
-    ['リマインド送信先', 'info@ns0314.com']
+    ['リマインド送信先', 'info@ns0314.com'],
+    ['ダッシュボードURL', 'https://script.google.com/macros/s/AKfycbzwYN9uSEtcJHSKSVQCoQOrllhO7G6gR-E4dvP-V4o_VdGXr9VQx2mbYYPNyNEFSQCiKg/exec']
   ];
   if (!sh) {
     sh = ss.insertSheet(SD_EXT_SHEET);
@@ -1194,6 +1198,9 @@ function sd_issueAndSend(token, store, monthKey, sendMail) {
       }
       if (attachNames.length) {
         body += '\n\n■添付書類\n・' + blob.getName() + '（精算書）\n・' + attachNames.join('\n・');
+      }
+      if (ext['ダッシュボードURL']) {
+        body += '\n\n──────────────────\n■ 精算ダッシュボード（過去分の精算書もこちらでご確認いただけます）\n' + ext['ダッシュボードURL'];
       }
       var opts = { attachments: attachments, name: ext['メール送信者名'] || '株式会社N-Style' };
       if (ms.cc) opts.cc = ms.cc;
