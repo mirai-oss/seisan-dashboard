@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.2';
+var SD_VERSION = 'v5.3';
 var SD_START_MONTH = '2026-03'; // これより前の月はプルダウンに出さない
 var SD_PAID_SHEET = '振込管理_精算ダッシュボード';
 var SD_CORP_SHEET = '法人設定_精算ダッシュボード';
@@ -422,7 +422,80 @@ function sd_setPaid(token, store, monthKey, done, sendMail) {
     result.mailed = true;
     result.to = ms.to;
   }
+  // 全店舗の振込が完了したらLarkに月次完了報告（この月で初めて完了したときだけ送信）
+  if (done) {
+    try {
+      var n = sd_maybeNotifyComplete_(monthKey);
+      if (n && n.sent) result.larkNotified = true;
+    } catch (e) { sd_log_('Lark完了報告エラー', '全店舗', monthKey, String((e && e.message) || e), '', '', user.name, ''); }
+  }
   return result;
+}
+
+/* 対象月の「精算対象の全店舗（＝売上入力済みの店舗）」が全て振込済みになったら
+ * Larkに完了報告を送る。既にこの月の報告を送っていれば何もしない（二重送信防止）。 */
+function sd_maybeNotifyComplete_(monthKey) {
+  // 既送信チェック
+  var already = sd_logRows_().some(function (r) {
+    return r.action === 'Lark完了報告' && r.month === monthKey;
+  });
+  if (already) return { sent: false, reason: '送信済み' };
+
+  var det = sd_detect_();
+  var cfg = sd_config_(sd_masterStores_(det), det);
+  var paid = sd_paidMap_();
+
+  var targets = []; // 精算対象（売上入力あり）の店舗
+  var allPaid = true;
+  cfg.forEach(function (st) {
+    if (!st.db) return;
+    var settle = sd_settle_(sd_readRowsCached_(st.db), monthKey, st.rate, st.fixed);
+    if (!settle.hasSales) return; // 売上未入力＝まだ精算対象でない
+    var isPaid = !!((paid[sd_norm_(st.name)] || {})[monthKey] && paid[sd_norm_(st.name)][monthKey].done);
+    targets.push({ name: st.name, transfer: settle.transfer, paid: isPaid });
+    if (!isPaid) allPaid = false;
+  });
+
+  if (targets.length === 0 || !allPaid) return { sent: false, reason: '未完了' };
+
+  var total = targets.reduce(function (a, t) { return a + t.transfer; }, 0);
+  return sd_notifyLarkComplete_(monthKey, targets, total);
+}
+
+function sd_notifyLarkComplete_(monthKey, targets, total) {
+  var ext = sd_extConfig_();
+  var url = ext['Lark完了報告Webhook'];
+  if (!url) { Logger.log('Lark完了報告Webhookが未設定のため送信をスキップしました'); return { sent: false, reason: 'Webhook未設定' }; }
+  var kw = ext['Larkキーワード'] || '';
+  var lines = targets.map(function (t) { return '・' + t.name + '：' + sd_yen_(t.transfer); });
+  var text = (kw ? kw + '\n' : '') // カスタムキーワード設定がある場合は先頭に含める
+    + '✅【精算完了報告】' + sd_monthLabel_(monthKey) + '分\n'
+    + '全' + targets.length + '店舗の精算書発行・お振込が完了しました。\n\n'
+    + lines.join('\n') + '\n\n'
+    + '合計振込額（税込）：' + sd_yen_(total);
+  var res = UrlFetchApp.fetch(url, {
+    method: 'post', contentType: 'application/json',
+    payload: JSON.stringify({ msg_type: 'text', content: { text: text } }),
+    muteHttpExceptions: true
+  });
+  var code = res.getResponseCode();
+  var bodyText = res.getContentText();
+  var okFlag = false;
+  try { okFlag = (JSON.parse(bodyText).code === 0) || (JSON.parse(bodyText).StatusCode === 0); } catch (e) { /* 解析不可 */ }
+  if (code === 200 && okFlag) {
+    sd_log_('Lark完了報告', '全店舗', monthKey, '全' + targets.length + '店舗完了 合計' + sd_yen_(total), '', '', '自動', '');
+    return { sent: true };
+  }
+  sd_log_('Lark完了報告エラー', '全店舗', monthKey, 'HTTP' + code + ' ' + bodyText, '', '', '自動', '');
+  return { sent: false, reason: 'Lark送信失敗: ' + bodyText };
+}
+
+/* エディタから手動でLark送信をテストする用（強制送信・二重送信チェックなし） */
+function sd_testLarkComplete() {
+  var now = new Date();
+  var monthKey = sd_fmtMonth_(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+  var r = sd_notifyLarkComplete_(monthKey, [{ name: 'テスト店舗', transfer: 1000000 }], 1000000);
+  Logger.log(JSON.stringify(r));
 }
 
 function sd_corpMap_(cfg) {
@@ -480,7 +553,9 @@ function sd_extConfig_() {
     ['発行元_登録番号', ''],
     ['発行元_振込先', ''],
     ['リマインド送信先', ''],
-    ['ダッシュボードURL', '']
+    ['ダッシュボードURL', ''],
+    ['Lark完了報告Webhook', ''],
+    ['Larkキーワード', '']
   ];
   if (!sh) {
     sh = ss.insertSheet(SD_EXT_SHEET);
