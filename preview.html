@@ -191,7 +191,7 @@
 </style>
 </head>
 <body>
-<div style="background:#1f2430;color:#fff;font-size:12px;padding:8px 16px;text-align:center">🔍 プレビュー（サンプル）。honbu / 任意PW でログイン。</div>
+<div style="background:#1f2430;color:#fff;font-size:12px;padding:8px 16px;text-align:center">🔍 プレビュー（サンプル・fetchモック）。honbu / 任意PW でログイン。</div>
 
 <!-- ログイン -->
 <div id="login-view">
@@ -375,7 +375,7 @@
     return {name:name,client:client,rate:rateP.toFixed(1)+'%',fixed:fixed,dbSheet:name,hasDb:true,matrix:matrix,issued:issued,
       detail:{rows:rows,sales:se.sales,cost:se.costTotal,count:rows.length,settle:se,missing:missing,catWarn:catWarn,
         issuedThis:ISSUED.indexOf(TARGET)>-1||!!sent,sent:sent||null,paid:PAID[name]||null}};}
-  var AKIBA_SENT={at:'2026-07-18 19:20',action:'メール送信',fileId:'d1',fileName:'精算書_2026.06_秋葉原 肉寿司.pdf',to:'kawakou12@gmail.com'};
+  var AKIBA_SENT={at:'2026-07-18 19:20',action:'メール送信',fileId:'d1',fileName:'精算書_2026.06_秋葉原 肉寿司.pdf',to:'sample@example.com'};
   function stores(){return [
     mkStore('秋葉原 肉寿司','株式会社FAM Dining',7.0,{rent:816750,ins:20000,sss:30000},[
       {kubun:'売上',item:'6月現金売上',amount:3146612,tax:'10%',note:'',editor:'中山',at:'7/14',edited:''},
@@ -393,41 +393,94 @@
     corps:{'株式会社FAMDining':{account:'三井住友 渋谷 普通 1234567',note:''},'株式会社MostFun':{account:'',note:''}},
     kubunOptions:['売上','変動費','固定ロイヤリティ','変動ロイヤリティ','固定調整'],taxOptions:['10%','8%','対象外'],
     sheetUrl:ROLE==='本部'?'https://example.com':'',updatedAt:'2026-07-18 21:00（サンプル）'};}
-  window.google={script:{}};
-  Object.defineProperty(window.google.script,'run',{get:function(){
-    var ok=function(){},ng=function(){};function later(v){setTimeout(function(){ok(v);},200);}
-    var h={withSuccessHandler:function(f){ok=f;return h;},withFailureHandler:function(f){ng=f;return h;},
-      sd_login:function(id,pw){ROLE=(id.indexOf('honbu')>-1)?'本部':'委託先';NAME=ROLE==='本部'?'本部':'FAM Dining様';later({token:'tk',name:NAME,role:ROLE});},
-      sd_getDashboard:function(t,mk){later(dash());},
-      sd_updateRow:function(t,p){EDITED[p.store+'|'+p.row]='7/18 '+NAME;later({ok:true,row:p.row,item:p.item});},
-      sd_setPaid:function(t,s,mk,dn,sm){PAID[s]=dn?{done:true,date:'2026-07-18',by:NAME}:null;later({ok:true,store:s,month:mk,done:dn,mailed:!!(dn&&sm),to:'kawakou12@gmail.com'});},
-      sd_addRows:function(t,p){later({ok:true,added:p.rows.length,sheet:'（プレビュー）',month:p.month});},
-      sd_uploadAttachment:function(t,p){later({ok:true,name:p.kind+'_2026.06_'+p.store+'.pdf',url:'#',folder:'2026年6月／'+p.store});},
-      sd_bulkAdd:function(t,p){var ms=[],k=p.fromMonth;while(k<=p.toMonth){ms.push(k);k=addM(k,1);}later({ok:true,months:ms,item:p.item,amount:p.amount,store:p.store});},
-      sd_getSettings:function(t){later({accounts:[{id:'honbu',pw:'x',name:'本部',role:'本部',stores:'全店',enabled:true}],corps:[{client:'株式会社FAM Dining',account:'三井住友 渋谷 普通 1234567',note:''}],stores:[{name:'秋葉原 肉寿司',client:'株式会社FAM Dining',rate:'7.0%',hasDb:true}],masterSheetUrl:'https://example.com'});},
-      sd_saveAccount:function(t,a){later({ok:true,id:a.id,updated:true});},
-      sd_saveCorp:function(t,c){later({ok:true,client:c.client,updated:true});},
-      sd_updateCheckSheet:function(t,mk){later('更新');},
-      sd_cashPreview:function(t,mk){later({month:mk,monthLabel:'2026年6月',items:[]});},
-      sd_cashApply:function(t,mk,s){later({ok:true,results:[]});},
-      sd_prepareMonth:function(t,mk){later({ok:true,results:['なし']});},
-      sd_setupAutoPrep:function(t){later({ok:true,message:'毎月1日9時 定期費目セット＋毎月18日9時 振込期限リマインド を設定しました'});},
-      sd_pdfPreview:function(t,s,mk){later({fileName:'精算書_2026.06_'+s+'.pdf',b64:PDFB64});},
-      sd_issueAndSend:function(t,s,mk){var re=(s==='秋葉原 肉寿司');later({ok:true,fileName:'精算書_2026.06_'+s+(re?'_再送信':'')+'.pdf',mailed:true,to:'sample@example.com',resend:re});},
-      sd_listAttachments:function(t,s,mk){later([]);}
-    };return h;}});
+  
+  var API_MAP = {
+sd_login:function(id,pw){ROLE=(id.indexOf('honbu')>-1)?'本部':'委託先';NAME=ROLE==='本部'?'本部':'FAM Dining様';return ({token:'tk',name:NAME,role:ROLE});},
+      sd_getDashboard:function(t,mk){return (dash());},
+      sd_updateRow:function(t,p){EDITED[p.store+'|'+p.row]='7/18 '+NAME;return ({ok:true,row:p.row,item:p.item});},
+      sd_setPaid:function(t,s,mk,dn,sm){PAID[s]=dn?{done:true,date:'2026-07-18',by:NAME}:null;return ({ok:true,store:s,month:mk,done:dn,mailed:!!(dn&&sm),to:'sample@example.com'});},
+      sd_addRows:function(t,p){return ({ok:true,added:p.rows.length,sheet:'（プレビュー）',month:p.month});},
+      sd_uploadAttachment:function(t,p){return ({ok:true,name:p.kind+'_2026.06_'+p.store+'.pdf',url:'#',folder:'2026年6月／'+p.store});},
+      sd_bulkAdd:function(t,p){var ms=[],k=p.fromMonth;while(k<=p.toMonth){ms.push(k);k=addM(k,1);}return ({ok:true,months:ms,item:p.item,amount:p.amount,store:p.store});},
+      sd_getSettings:function(t){return ({accounts:[{id:'honbu',pw:'x',name:'本部',role:'本部',stores:'全店',enabled:true}],corps:[{client:'株式会社FAM Dining',account:'三井住友 渋谷 普通 1234567',note:''}],stores:[{name:'秋葉原 肉寿司',client:'株式会社FAM Dining',rate:'7.0%',hasDb:true}],masterSheetUrl:'https://example.com'});},
+      sd_saveAccount:function(t,a){return ({ok:true,id:a.id,updated:true});},
+      sd_saveCorp:function(t,c){return ({ok:true,client:c.client,updated:true});},
+      sd_updateCheckSheet:function(t,mk){return ('更新');},
+      sd_cashPreview:function(t,mk){return ({month:mk,monthLabel:'2026年6月',items:[]});},
+      sd_cashApply:function(t,mk,s){return ({ok:true,results:[]});},
+      sd_prepareMonth:function(t,mk){return ({ok:true,results:['なし']});},
+      sd_setupAutoPrep:function(t){return ({ok:true,message:'毎月1日9時 定期費目セット＋毎月18日9時 振込期限リマインド を設定しました'});},
+      sd_pdfPreview:function(t,s,mk){return ({fileName:'精算書_2026.06_'+s+'.pdf',b64:PDFB64});},
+      sd_issueAndSend:function(t,s,mk){var re=(s==='秋葉原 肉寿司');return ({ok:true,fileName:'精算書_2026.06_'+s+(re?'_再送信':'')+'.pdf',mailed:true,to:'sample@example.com',resend:re});},
+      sd_listAttachments:function(t,s,mk){return ([]);}
+  };
+  var __origFetch = window.fetch.bind(window);
+  window.fetch = function(url, opts){
+    if(typeof url==='string' && url.indexOf('script.google.com')>-1){
+      var fn, args;
+      if(opts && opts.method==='POST'){
+        var b=JSON.parse(opts.body||'{}'); fn=b.fn; args=b.args||[];
+      } else {
+        var u=new URL(url); fn=u.searchParams.get('fn'); args=JSON.parse(u.searchParams.get('args')||'[]');
+      }
+      return new Promise(function(resolve){
+        setTimeout(function(){
+          try{
+            var impl = API_MAP[fn];
+            if(!impl) throw new Error('未実装のモック関数: '+fn);
+            var result = impl.apply(null, args);
+            resolve({ok:true,status:200,json:function(){return Promise.resolve({ok:true,result:result});}});
+          }catch(e){
+            resolve({ok:true,status:200,json:function(){return Promise.resolve({ok:false,error:String(e.message||e)});}});
+          }
+        },250);
+      });
+    }
+    return __origFetch(url, opts);
+  };
 })();
 </script>
 <script>
+/* GASバックエンドのWebアプリURL（?action=ping で疎通確認可）。
+ * 再デプロイでURLが変わった場合はここを書き換えてください。 */
+var GAS_API_URL = 'https://script.google.com/macros/s/AKfycbzwYN9uSEtcJHSKSVQCoQOrllhO7G6gR-E4dvP-V4o_VdGXr9VQx2mbYYPNyNEFSQCiKg/exec';
+
 var state = { token: localStorage.getItem('sd_token')||'', month:'', data:null };
 
-/* ===== API ===== */
+/* ===== API（GASをJSONバックエンドとしてfetchで呼ぶ） =====
+ * POSTを基本とし、ネットワークレベルで失敗した場合はGETに自動フォールバックする
+ * （Apps ScriptはPOSTよりGETのクロスオリジン応答が安定しているため）。
+ * ただしGETはURL長に制限があるため、大きなペイロード（ファイル添付など）はPOST専用。 */
+function apiPost_(fn, args){
+  return fetch(GAS_API_URL, {
+    method: 'POST',
+    body: JSON.stringify({ fn: fn, args: args })
+  }).then(function(r){
+    if(!r.ok) throw new Error('サーバーエラー (HTTP '+r.status+')');
+    return r.json();
+  });
+}
+function apiGet_(fn, args){
+  var q = '?fn='+encodeURIComponent(fn)+'&args='+encodeURIComponent(JSON.stringify(args));
+  if((GAS_API_URL+q).length > 7000) return Promise.reject(new Error('データが大きすぎてGET方式では送れません'));
+  return fetch(GAS_API_URL+q).then(function(r){
+    if(!r.ok) throw new Error('サーバーエラー (HTTP '+r.status+')');
+    return r.json();
+  });
+}
 function api(fn){
   var args = Array.prototype.slice.call(arguments,1);
-  return new Promise(function(res,rej){
-    var r = google.script.run.withSuccessHandler(res).withFailureHandler(function(e){ rej(e); });
-    r[fn].apply(r,args);
-  });
+  var argsStr = JSON.stringify(args);
+  var canFallbackToGet = argsStr.length < 6500; // 大きなペイロード（添付ファイル等）はGET不可
+  return apiPost_(fn, args)
+    .catch(function(e){
+      if(!canFallbackToGet) throw e;
+      return apiGet_(fn, args); // POSTがネットワークレベルで失敗 → GETで再試行
+    })
+    .then(function(res){
+      if(!res.ok){ throw new Error(res.error||'不明なエラー'); }
+      return res.result;
+    });
 }
 function apiAuth(fn){
   var args=[fn, state.token].concat(Array.prototype.slice.call(arguments,1));

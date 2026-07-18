@@ -1,21 +1,23 @@
 /**********************************************************************
- * 精算ダッシュボード v2
+ * 精算ダッシュボード バックエンド（GAS = JSON APIのみ）
  *
- * 機能:
- *  1. 現金売上の自動取込（【サーバー】ダッシュボード「分析_日別店舗」T列から）
- *  2. PDFプレビュー・メール送信・翌月分の定期費目自動セット
- *  3. 添付ファイルのアップロード（自動リネーム＋月・店舗フォルダへ格納）
- *  4. ログインアカウント制（本部 / 委託先、店舗単位の閲覧制限）
+ * 画面（UI）はこのプロジェクトの外、GitHub Pagesで配信される静的サイトです。
+ * このファイルは「データを読み書きするAPI」としてのみ動作します。
+ * doGet/doPost が fn（関数名）と args（引数配列）を受け取り、
+ * SD_API_WHITELIST に載っている sd_ 関数だけを呼び出してJSONを返します。
  *
- * 既存の精算書スクリプトには一切手を加えません。
- * 全関数 sd_ プレフィックス（doGet のみ例外）。
+ * こうしている理由: GASのHtmlServiceでUIごと配信すると、Google Workspace
+ * 管理者の「Apps Scriptサービス制限」等でスマホから開けなくなることがある。
+ * UIを外部の静的サイトにして、データ取得だけを軽いfetch(JSON)にすることで
+ * この制約を回避する（参考: 売上ダッシュボード tori-dashboard と同じ構成）。
  *
- * ★ v2 は「次のユーザーとして実行: 自分」でデプロイしてください。
- *   （委託先アカウントがスプレッドシート共有なしで使えるようにするため）
+ * 全関数 sd_ プレフィックス（doGet/doPost のみ例外）。
+ *
+ * ★「次のユーザーとして実行: 自分」「アクセスできるユーザー: 全員」でデプロイしてください。
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v4.6';
+var SD_VERSION = 'v5.0';
 var SD_START_MONTH = '2026-03'; // これより前の月はプルダウンに出さない
 var SD_PAID_SHEET = '振込管理_精算ダッシュボード';
 var SD_CORP_SHEET = '法人設定_精算ダッシュボード';
@@ -29,17 +31,62 @@ var SD_TZ = 'Asia/Tokyo';
 var SD_TAX_OPTIONS = ['10%', '8%', '対象外'];
 var SD_KUBUN_OPTIONS = ['売上', '変動費', '固定ロイヤリティ', '変動ロイヤリティ', '固定調整'];
 
-/* ---------- Webアプリ入口 ---------- */
+/* ---------- Webアプリ入口（JSON APIのみ） ----------
+ * 呼べる関数はここに明示的に列挙したものだけ（それ以外は拒否）。
+ * sd_login 以外は全て第1引数がtoken（内部の sd_auth_ が権限検証する）。 */
+var SD_API_WHITELIST = [
+  'sd_login', 'sd_getDashboard', 'sd_addRows', 'sd_updateRow', 'sd_setPaid',
+  'sd_pdfPreview', 'sd_issueAndSend', 'sd_cashPreview', 'sd_cashApply',
+  'sd_prepareMonth', 'sd_setupAutoPrep', 'sd_uploadAttachment', 'sd_listAttachments',
+  'sd_getPdfB64', 'sd_updateCheckSheet', 'sd_bulkAdd', 'sd_getSettings',
+  'sd_saveAccount', 'sd_saveCorp'
+];
+
+function sd_apiFnMap_() {
+  return {
+    sd_login: sd_login, sd_getDashboard: sd_getDashboard, sd_addRows: sd_addRows,
+    sd_updateRow: sd_updateRow, sd_setPaid: sd_setPaid, sd_pdfPreview: sd_pdfPreview,
+    sd_issueAndSend: sd_issueAndSend, sd_cashPreview: sd_cashPreview, sd_cashApply: sd_cashApply,
+    sd_prepareMonth: sd_prepareMonth, sd_setupAutoPrep: sd_setupAutoPrep,
+    sd_uploadAttachment: sd_uploadAttachment, sd_listAttachments: sd_listAttachments,
+    sd_getPdfB64: sd_getPdfB64, sd_updateCheckSheet: sd_updateCheckSheet,
+    sd_bulkAdd: sd_bulkAdd, sd_getSettings: sd_getSettings,
+    sd_saveAccount: sd_saveAccount, sd_saveCorp: sd_saveCorp
+  };
+}
+
+function sd_jsonOut_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function sd_handleApi_(fn, args) {
+  if (SD_API_WHITELIST.indexOf(fn) < 0) return { ok: false, error: '許可されていない呼び出しです: ' + fn };
+  var f = sd_apiFnMap_()[fn];
+  try {
+    var result = f.apply(null, args || []);
+    return { ok: true, result: result };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
 
 function doGet(e) {
-  if (e && e.parameter && e.parameter.action === 'ping') {
-    return ContentService.createTextOutput(JSON.stringify({ ok: true, ver: SD_VERSION }))
-      .setMimeType(ContentService.MimeType.JSON);
+  var p = (e && e.parameter) || {};
+  if (p.action === 'ping') return sd_jsonOut_({ ok: true, ver: SD_VERSION });
+  if (p.fn) {
+    var args = [];
+    try { args = JSON.parse(p.args || '[]'); } catch (err) { /* 空配列のまま */ }
+    return sd_jsonOut_(sd_handleApi_(p.fn, args));
   }
-  return HtmlService.createTemplateFromFile('dashboard')
-    .evaluate()
-    .setTitle('精算ダッシュボード')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  return sd_jsonOut_({ ok: false, error: 'このエンドポイントはJSON APIです。画面はGitHub Pages側をご利用ください。' });
+}
+
+function doPost(e) {
+  var payload = {};
+  try { payload = JSON.parse(e.postData.contents); } catch (err) {
+    return sd_jsonOut_({ ok: false, error: 'リクエストの解析に失敗しました' });
+  }
+  return sd_jsonOut_(sd_handleApi_(payload.fn, payload.args));
 }
 
 /* ---------- 初回承認用（エディタから一度実行） ---------- */
@@ -418,21 +465,21 @@ function sd_extConfig_() {
   var ss = SpreadsheetApp.getActive();
   var sh = ss.getSheetByName(SD_EXT_SHEET);
   var DEFAULTS = [
-    ['売上スプレッドシートID', '1OuaAQBeXHxJZtDXEbQx-V7w56fCWW5jpDmZvBpkfIbQ'],
+    ['売上スプレッドシートID', ''],
     ['売上シート名', '分析_日別店舗'],
     ['売上_日付列', 'A'],
     ['売上_店舗名列', 'J'],
     ['売上_現金列', 'T'],
-    ['添付親フォルダID', '1PZU4slLx2LmZLIDpX4yihv9rlkDrPsiG'],
-    ['メール送信者名', '株式会社N-Style'],
-    ['発行元_会社名', '株式会社N-style'],
-    ['発行元_郵便番号', '153-0051'],
-    ['発行元_住所', '東京都目黒区上目黒1-16-12鈴房ビル202A'],
-    ['発行元_電話', '080-5379-7126'],
-    ['発行元_登録番号', 'T5011001118040'],
+    ['添付親フォルダID', ''],
+    ['メール送信者名', ''],
+    ['発行元_会社名', ''],
+    ['発行元_郵便番号', ''],
+    ['発行元_住所', ''],
+    ['発行元_電話', ''],
+    ['発行元_登録番号', ''],
     ['発行元_振込先', ''],
-    ['リマインド送信先', 'info@ns0314.com'],
-    ['ダッシュボードURL', 'https://script.google.com/macros/s/AKfycbzwYN9uSEtcJHSKSVQCoQOrllhO7G6gR-E4dvP-V4o_VdGXr9VQx2mbYYPNyNEFSQCiKg/exec']
+    ['リマインド送信先', ''],
+    ['ダッシュボードURL', '']
   ];
   if (!sh) {
     sh = ss.insertSheet(SD_EXT_SHEET);
@@ -464,10 +511,12 @@ function sd_authSheet_() {
   if (!sh) {
     sh = ss.insertSheet(SD_AUTH_SHEET);
     sh.getRange(1, 1, 1, 6).setValues([['ログインID', 'パスワード', '表示名', '権限（本部/委託先）', '担当店舗（カンマ区切り／全店）', '有効（TRUE/FALSE）']]);
+    var initPw = Utilities.getUuid().split('-')[0]; // ランダムな初期パスワード（実行ログに1回だけ出力）
     sh.getRange(2, 1, 2, 6).setValues([
-      ['honbu', 'ns0314', '本部', '本部', '全店', 'TRUE'],
-      ['fam', 'fam2026', 'FAM Dining様', '委託先', '秋葉原 肉寿司', 'FALSE']
+      ['honbu', initPw, '本部', '本部', '全店', 'TRUE'],
+      ['（例）委託先ID', '（例）パスワード', '委託先の表示名', '委託先', '担当店舗名をカンマ区切りで', 'FALSE']
     ]);
+    Logger.log('本部アカウントの初期パスワードを発行しました: honbu / ' + initPw + '（必ずログイン後に変更してください）');
     sh.setFrozenRows(1);
     sh.autoResizeColumns(1, 6);
   }
@@ -1382,7 +1431,8 @@ function sd_remindTick() {
   var monthKey = sd_fmtMonth_(new Date(now.getFullYear(), now.getMonth() - 1, 1)); // 精算対象月＝前月
   var det = sd_detect_();
   var ext = sd_extConfig_();
-  var to = ext['リマインド送信先'] || 'info@ns0314.com';
+  var to = ext['リマインド送信先'];
+  if (!to) { Logger.log('リマインド送信先が未設定のため送信をスキップしました（設定_外部連携シートで設定してください）'); return { ok: false, message: 'リマインド送信先未設定' }; }
   var cfg = sd_config_(sd_masterStores_(det), det);
   var issued = sd_issuedMap_(det);
   var sent = sd_sentMap_();
