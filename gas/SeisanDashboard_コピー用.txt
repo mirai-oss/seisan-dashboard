@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.0';
+var SD_VERSION = 'v5.1';
 var SD_START_MONTH = '2026-03'; // これより前の月はプルダウンに出さない
 var SD_PAID_SHEET = '振込管理_精算ダッシュボード';
 var SD_CORP_SHEET = '法人設定_精算ダッシュボード';
@@ -470,6 +470,7 @@ function sd_extConfig_() {
     ['売上_日付列', 'A'],
     ['売上_店舗名列', 'J'],
     ['売上_現金列', 'T'],
+    ['売上_支払合計列', 'S'],
     ['添付親フォルダID', ''],
     ['メール送信者名', ''],
     ['発行元_会社名', ''],
@@ -727,6 +728,8 @@ function sd_getDashboard(token, monthKey) {
   SD_KUBUN_OPTIONS.forEach(function (k) { kubunSet[k] = true; });
   var paidAll = sd_paidMap_();
   var corps = sd_corpMap_(cfg);
+  var ext = sd_extConfig_();
+  var payMap = sd_paySumsCached_(ext, monthKey, cfg); // 売上シートS列の対象月合計（未設定ならnull）
 
   var stores = cfg.map(function (st) {
     var rows = st.db ? sd_readRowsCached_(st.db) : [];
@@ -768,6 +771,21 @@ function sd_getDashboard(token, monthKey) {
     };
     var sentInfo = (sentLog[sd_norm_(st.name)] || {})[monthKey] || null;
     var isIssued = (issued[sd_norm_(st.name)] || {})[monthKey] === true || !!sentInfo;
+
+    // 売上照合: 売上シートの支払合計（実売上）と、精算書に入力された売上合計を突き合わせる
+    var salesCheck = null;
+    if (payMap) {
+      var src = payMap[sd_norm_(st.salesName)];
+      if (src != null) {
+        salesCheck = {
+          source: src,               // 売上シート S列 支払合計（実売上）
+          entered: settle.sales,     // 精算書に入力された売上合計
+          diff: settle.sales - src,  // ＋=精算書が多い ／ −=精算書が少ない（入力漏れの可能性）
+          salesName: st.salesName
+        };
+      }
+    }
+
     return {
       name: st.name, client: st.client, rate: st.rate,
       fixed: fixed,
@@ -780,7 +798,8 @@ function sd_getDashboard(token, monthKey) {
         missing: chk.missing, catWarn: chk.catWarn,
         issuedThis: isIssued,
         sent: sentInfo, // {at, fileId, fileName, to} or null
-        paid: paidByMonth[monthKey] || null // {done, date, by} or null
+        paid: paidByMonth[monthKey] || null, // {done, date, by} or null
+        salesCheck: salesCheck // {source, entered, diff, salesName} or null
       }
     };
   });
@@ -1020,6 +1039,53 @@ function sd_cashSums_(ext, monthKey, cfg) {
   Object.keys(sums).forEach(function (k) {
     if (k.indexOf('days_') !== 0) sums[k] = Math.round(sums[k]);
   });
+  return sums;
+}
+
+/* ---------- 売上照合（S列 支払合計 の月合計を店舗別に集計） ----------
+ * 精算書に入力された売上合計と、売上シート側の実売上（支払合計）を突き合わせる指標。
+ * 月切替のたびに呼ばれるので CacheService に10分キャッシュ。 */
+function sd_paySums_(ext, monthKey, cfg) {
+  var sid = ext['売上スプレッドシートID'];
+  if (!sid) return null; // 売上シート未設定なら照合しない
+  var ss;
+  try { ss = SpreadsheetApp.openById(sid); } catch (e) { return null; }
+  var sh = ss.getSheetByName(ext['売上シート名'] || '分析_日別店舗');
+  if (!sh) return null;
+  var cDate = sd_colLetterToNum_(ext['売上_日付列'] || 'A');
+  var cStore = sd_colLetterToNum_(ext['売上_店舗名列'] || 'J');
+  var cPay = sd_colLetterToNum_(ext['売上_支払合計列'] || 'S');
+  var lastR = sh.getLastRow();
+  var width = Math.max(cDate, cStore, cPay);
+  var wanted = {};
+  cfg.forEach(function (st) { wanted[sd_norm_(st.salesName)] = true; });
+  var mDate = sd_monthKeyToDate_(monthKey);
+  var y = mDate.getFullYear(), mo = mDate.getMonth();
+  var sums = {};
+  var CHUNK = 5000;
+  for (var start = 2; start <= lastR; start += CHUNK) {
+    var n = Math.min(CHUNK, lastR - start + 1);
+    var vals = sh.getRange(start, 1, n, width).getValues();
+    for (var i = 0; i < vals.length; i++) {
+      var dt = vals[i][cDate - 1];
+      if (!(dt instanceof Date) || dt.getFullYear() !== y || dt.getMonth() !== mo) continue;
+      var nm = sd_norm_(vals[i][cStore - 1]);
+      if (!wanted[nm]) continue;
+      sums[nm] = (sums[nm] || 0) + (Number(vals[i][cPay - 1]) || 0);
+    }
+  }
+  Object.keys(sums).forEach(function (k) { sums[k] = Math.round(sums[k]); });
+  return sums;
+}
+
+function sd_paySumsCached_(ext, monthKey, cfg) {
+  if (!ext['売上スプレッドシートID']) return null;
+  var cache = CacheService.getScriptCache();
+  var key = 'sdpay_' + monthKey;
+  var hit = cache.get(key);
+  if (hit) { try { return JSON.parse(hit); } catch (e) { /* 読み直す */ } }
+  var sums = sd_paySums_(ext, monthKey, cfg);
+  if (sums) { try { cache.put(key, JSON.stringify(sums), 600); } catch (e) { /* 無視 */ } }
   return sums;
 }
 

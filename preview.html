@@ -73,6 +73,11 @@
   .mchip.cat{background:var(--warn-bg);color:var(--warn);border-color:#ecd9a0}
   .ok-note{font-size:12px;color:var(--good)}
   .sent-note{font-size:12px;color:var(--ink2)}
+  .salescheck{font-size:12.5px;border-radius:8px;padding:7px 10px;border:1px solid var(--line)}
+  .salescheck.ok{color:var(--good);background:var(--good-bg);border-color:#bfe3cd}
+  .salescheck.warn{color:var(--warn);background:var(--warn-bg);border-color:#ecd9a0;font-weight:700}
+  .salescheck .sc-detail{font-weight:400;color:var(--ink2);font-size:12px;margin-top:2px}
+  .salescheck .sc-note{font-weight:400;color:var(--ink3);font-size:11px;margin-top:2px}
   .paidline{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink2)}
   .paidline input{width:16px;height:16px;accent-color:var(--paid)}
   .store .actions{margin-top:auto;display:flex;gap:6px;flex-wrap:wrap}
@@ -388,7 +393,7 @@
     ],['ガス料金'],[],{'2026-03':{s:12511491},'2026-04':{s:10491876,p:1},'2026-05':{s:11220450}},null)
   ];}
   var ROLE='本部',NAME='本部';
-  function dash(){var st=stores();return {ver:'v4.5（プレビュー）',user:{name:NAME,role:ROLE},month:TARGET,monthLabel:'2026年6月',
+  function dash(){var st=stores();if(st[0]){st[0].detail.salesCheck={source:st[0].detail.sales,entered:st[0].detail.sales,diff:0,salesName:st[0].name};}if(st[1]){st[1].detail.salesCheck={source:st[1].detail.sales+120000,entered:st[1].detail.sales,diff:-120000,salesName:st[1].name};}return {ver:'v5.1（プレビュー）',user:{name:NAME,role:ROLE},month:TARGET,monthLabel:'2026年6月',
     months:MONTHS,stores:ROLE==='本部'?st:st.slice(0,1),
     corps:{'株式会社FAMDining':{account:'三井住友 渋谷 普通 1234567',note:''},'株式会社MostFun':{account:'',note:''}},
     kubunOptions:['売上','変動費','固定ロイヤリティ','変動ロイヤリティ','固定調整'],taxOptions:['10%','8%','対象外'],
@@ -656,6 +661,7 @@ function renderCards(){
       missHtml='<div class="miss"><span class="ok-note">✅ 直近月と比べて欠けている費目はありません</span></div>';
     }
     var sentHtml = dt.sent ? '<div class="sent-note">📨 '+esc(dt.sent.action)+' '+esc(dt.sent.at)+(dt.sent.to?'（→ '+esc(dt.sent.to)+'）':'')+'</div>' : '';
+    var checkHtml = salesCheckHtml(dt.salesCheck);
     var paidHtml = honbu
       ? '<label class="paidline"><input type="checkbox" '+(dt.paid&&dt.paid.done?'checked':'')+' onchange="togglePaid('+idx+',this)"> 振込済みにする'+(dt.paid&&dt.paid.done?'（'+esc(dt.paid.date)+' '+esc(dt.paid.by)+'）':'')+'</label>'
       : (dt.paid&&dt.paid.done?'<div class="paidline">💰 振込済み（'+esc(dt.paid.date)+'）</div>':'');
@@ -678,10 +684,25 @@ function renderCards(){
       +'<button class="toggle" onclick="var p=document.getElementById(\'sdt-'+idx+'\');p.style.display=p.style.display===\'none\'?\'\':\'none\'">内訳 ▾</button></div>'
       +'<div id="sdt-'+idx+'" style="display:none">'+settleTable(st)+'</div>'
       +'<div class="nums"><span>売上合計<b>'+yen(dt.sales)+'</b></span><span>経費合計<b>'+yen(se.costTotal)+'</b></span><span>明細<b>'+dt.count+'件</b></span></div>'
-      + missHtml + sentHtml + paidHtml
+      + missHtml + checkHtml + sentHtml + paidHtml
       +'<div class="actions">'+actions+'</div>'
       +'</div>';
   }).join('');
+}
+
+/* 売上照合の表示（軽いアラート）。差額が出ても繰越等で正常なことがあるので指標として控えめに出す。 */
+function salesCheckHtml(sc){
+  if(!sc) return '';
+  var diff = sc.diff; // entered - source
+  if(diff===0){
+    return '<div class="salescheck ok">✅ 売上照合 一致（売上シート '+yen(sc.source)+'）</div>';
+  }
+  var absd = Math.abs(diff);
+  var dir = diff>0 ? '精算書が多い' : '精算書が少ない（入力漏れの可能性）';
+  var sign = diff>0 ? '＋' : '−';
+  return '<div class="salescheck warn">⚠ 売上照合 差額 '+sign+yen(absd)
+    +'<div class="sc-detail">精算書 '+yen(sc.entered)+' ／ 売上シート '+yen(sc.source)+'　（'+dir+'）</div>'
+    +'<div class="sc-note">※ カード売上の翌月繰越などで差が出ることがあります。指標としてご確認ください。</div></div>';
 }
 
 /* ---- 法人別 ---- */
