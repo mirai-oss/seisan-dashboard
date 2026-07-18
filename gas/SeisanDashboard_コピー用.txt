@@ -15,7 +15,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v4.5';
+var SD_VERSION = 'v4.6';
 var SD_START_MONTH = '2026-03'; // これより前の月はプルダウンに出さない
 var SD_PAID_SHEET = '振込管理_精算ダッシュボード';
 var SD_CORP_SHEET = '法人設定_精算ダッシュボード';
@@ -366,7 +366,7 @@ function sd_setPaid(token, store, monthKey, done, sendMail) {
       + amountLine
       + '\nご査収のほど、よろしくお願い申し上げます。';
     if (ext['ダッシュボードURL']) {
-      body += '\n\n──────────────────\n■ 精算ダッシュボード（過去分の精算書もこちらでご確認いただけます）\n' + ext['ダッシュボードURL'];
+      body += '\n\n──────────────────\n■ 精算ダッシュボード（過去分の精算書もこちらでご確認いただけます）\n' + ext['ダッシュボードURL'] + '\n※ スマホで開けない場合は、リンクを長押しして「Safari/Chromeで開く」を選ぶか、ブラウザにURLを貼り付けてお開きください。';
     }
     var opts = { name: sender };
     if (ms.cc) opts.cc = ms.cc;
@@ -1226,7 +1226,7 @@ function sd_issueAndSend(token, store, monthKey, sendMail) {
         body += '\n\n■添付書類\n・' + blob.getName() + '（精算書）\n・' + attachNames.join('\n・');
       }
       if (ext['ダッシュボードURL']) {
-        body += '\n\n──────────────────\n■ 精算ダッシュボード（過去分の精算書もこちらでご確認いただけます）\n' + ext['ダッシュボードURL'];
+        body += '\n\n──────────────────\n■ 精算ダッシュボード（過去分の精算書もこちらでご確認いただけます）\n' + ext['ダッシュボードURL'] + '\n※ スマホで開けない場合は、リンクを長押しして「Safari/Chromeで開く」を選ぶか、ブラウザにURLを貼り付けてお開きください。';
       }
       var opts = { attachments: attachments, name: ext['メール送信者名'] || '株式会社N-Style' };
       if (ms.cc) opts.cc = ms.cc;
