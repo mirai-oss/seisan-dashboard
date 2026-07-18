@@ -15,7 +15,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v4.3';
+var SD_VERSION = 'v4.4';
 var SD_START_MONTH = '2026-03'; // これより前の月はプルダウンに出さない
 var SD_PAID_SHEET = '振込管理_精算ダッシュボード';
 var SD_CORP_SHEET = '法人設定_精算ダッシュボード';
@@ -524,6 +524,29 @@ function sd_allowedStores_(user, cfg) {
 
 /* ---------- DB読み取り／入力漏れ判定（v1と同じ） ---------- */
 
+/* DB読み取りのキャッシュ版（月切替の高速化用・3分）。
+ * 明細を変更したら sd_clearRowsCache_ で必ずクリアすること。 */
+function sd_readRowsCached_(db) {
+  var cache = CacheService.getScriptCache();
+  var key = 'sdrows_' + db.sheet;
+  var hit = cache.get(key);
+  if (hit) { try { return JSON.parse(hit); } catch (e) { /* 壊れていたら読み直す */ } }
+  var rows = sd_readRows_(db);
+  try {
+    var s = JSON.stringify(rows);
+    if (s.length < 95000) cache.put(key, s, 180); // CacheServiceの100KB上限に余裕を持たせる
+  } catch (e) { /* キャッシュ失敗は無視 */ }
+  return rows;
+}
+function sd_clearRowsCache_(sheetName) {
+  try { CacheService.getScriptCache().remove('sdrows_' + sheetName); } catch (e) { /* 無視 */ }
+}
+function sd_clearAllRowsCache_(det) {
+  try {
+    (det || sd_detect_()).dbs.forEach(function (db) { CacheService.getScriptCache().remove('sdrows_' + db.sheet); });
+  } catch (e) { /* 無視 */ }
+}
+
 function sd_readRows_(db) {
   var sh = SpreadsheetApp.getActive().getSheetByName(db.sheet);
   var hr = db.headerRow, cm = db.colMap;
@@ -657,7 +680,7 @@ function sd_getDashboard(token, monthKey) {
   var corps = sd_corpMap_(cfg);
 
   var stores = cfg.map(function (st) {
-    var rows = st.db ? sd_readRows_(st.db) : [];
+    var rows = st.db ? sd_readRowsCached_(st.db) : [];
     var byMonth = {};
     rows.forEach(function (r) {
       (byMonth[r.ym] = byMonth[r.ym] || []).push(r);
@@ -765,6 +788,7 @@ function sd_addRows(token, payload) {
     }
 
     var added = sd_appendRows_(st.db, ymDate, rows, payload.editor || user.name);
+    sd_clearRowsCache_(st.db.sheet);
     return { ok: true, added: added, sheet: st.db.sheet, month: payload.month };
   } finally {
     lock.releaseLock();
@@ -816,6 +840,7 @@ function sd_updateRow(token, payload) {
     if (cm.tax) sh.getRange(row, cm.tax).setValue(payload.tax || '10%');
     if (cm.note) sh.getRange(row, cm.note).setValue(String(payload.note || ''));
     sh.getRange(row, cm.edited).setValue(Utilities.formatDate(new Date(), SD_TZ, 'M/d') + ' ' + user.name);
+    sd_clearRowsCache_(st.db.sheet);
     return { ok: true, row: row, item: newItem };
   } finally {
     lock.releaseLock();
@@ -902,6 +927,7 @@ function sd_cashApply(token, monthKey, storeNames) {
         kubun: '売上', item: item, amount: amt, tax: '10%',
         note: '分析_日別店舗より自動取込'
       }], user.name);
+      sd_clearRowsCache_(st.db.sheet);
       results.push(st.name + ': ¥' + amt.toLocaleString() + ' を登録');
     });
     return { ok: true, results: results };
@@ -990,7 +1016,7 @@ function sd_buildSeisanHtml_(store, monthKey) {
   if (!st) throw new Error('店舗が見つかりません: ' + store);
   if (!st.db) throw new Error('店舗「' + store + '」のDBシートが見つかりません');
 
-  var rows = sd_readRows_(st.db);
+  var rows = sd_readRowsCached_(st.db);
   var s = sd_settle_(rows, monthKey, st.rate, st.fixed);
   var d = sd_monthKeyToDate_(monthKey);
   var monthLabel = d.getFullYear() + '年' + (d.getMonth() + 1) + '月';
@@ -1289,6 +1315,7 @@ function sd_prepareMonthCore_(monthKey, editorName) {
     });
     if (toAdd.length) {
       sd_appendRows_(st.db, d, toAdd, editorName || '自動');
+      sd_clearRowsCache_(st.db.sheet);
       results.push(st.name + ': ' + toAdd.map(function (r) { return r.item; }).join('、') + ' を追加');
     }
   });
@@ -1548,6 +1575,7 @@ function sd_bulkAdd(token, payload) {
     months.forEach(function (mk) {
       sd_appendRows_(st.db, sd_monthKeyToDate_(mk), [row], user.name);
     });
+    sd_clearRowsCache_(st.db.sheet);
     sd_log_('一括計上', payload.store, months[0] + '〜' + months[months.length - 1], item + ' ¥' + amt + ' ×' + months.length + 'ヶ月', '', '', user.name, '');
     return { ok: true, months: months, item: item, amount: amt, store: payload.store };
   } finally {

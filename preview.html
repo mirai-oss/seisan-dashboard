@@ -205,7 +205,7 @@
     <select id="month-select" onchange="loadDashboard(this.value)"></select>
     <button onclick="shiftMonth(1)" title="次の月">›</button>
     <span class="spacer"></span>
-    <button class="reload" onclick="loadDashboard(state.month)">↻ 再読込</button>
+    <button class="reload" onclick="loadDashboard(state.month,true)">↻ 再読込</button>
   </div>
 
   <div class="toolbar" id="honbu-toolbar" style="display:none">
@@ -365,7 +365,7 @@
     ],['ガス料金'],[],{'2026-03':{s:12511491},'2026-04':{s:10491876,p:1},'2026-05':{s:11220450}},null)
   ];}
   var ROLE='本部',NAME='本部';
-  function dash(){var st=stores();return {ver:'v4.2（プレビュー）',user:{name:NAME,role:ROLE},month:TARGET,monthLabel:'2026年6月',
+  function dash(){var st=stores();return {ver:'v4.4（プレビュー）',user:{name:NAME,role:ROLE},month:TARGET,monthLabel:'2026年6月',
     months:MONTHS,stores:ROLE==='本部'?st:st.slice(0,1),
     corps:{'株式会社FAMDining':{account:'三井住友 渋谷 普通 1234567',note:''},'株式会社MostFun':{account:'',note:''}},
     kubunOptions:['売上','変動費','固定ロイヤリティ','変動ロイヤリティ','固定調整'],taxOptions:['10%','8%','対象外'],
@@ -477,14 +477,32 @@ function shiftMonth(n){
 }
 function isHonbu(){ return state.data && state.data.user.role==='本部'; }
 
-function loadDashboard(monthKey){
+var dashCache={};
+function loadDashboard(monthKey, force){
+  var key=monthKey||'__default__';
+  if(force) dashCache={}; // 書き込み後は全月キャッシュを破棄
+  if(!force && dashCache[key]){
+    // キャッシュ即表示（裏で最新も取得して差し替え）
+    state.data=dashCache[key]; state.month=dashCache[key].month; render();
+    refreshInBackground(monthKey, key);
+    return;
+  }
   loading(true);
   apiAuth('sd_getDashboard', monthKey||null).then(function(data){
+    dashCache[key]=data; dashCache[data.month]=data;
     state.data=data; state.month=data.month;
     render();
     loading(false);
   }).catch(function(e){ loading(false); toast('読み込みエラー: '+(e.message||e)); });
 }
+function refreshInBackground(monthKey, key){
+  apiAuth('sd_getDashboard', monthKey||null).then(function(data){
+    dashCache[key]=data; dashCache[data.month]=data;
+    // 表示中の月がまだ同じなら差し替え
+    if(state.month===data.month){ state.data=data; render(); }
+  }).catch(function(){ /* 背景更新の失敗は無視 */ });
+}
+function invalidateCache(){ dashCache={}; }
 
 function render(){
   var d=state.data, honbu=isHonbu();
@@ -653,12 +671,12 @@ function setPaidCall(st, done, sendMail, cb){
     if(done && res.mailed) toast('💰 振込済みにして、完了メールを送信しました（→ '+res.to+'）');
     else if(done) toast('💰 '+st.name+' '+mLabel(res.month)+'分を振込済みにしました');
     else toast('↩ '+st.name+' の振込済みを解除しました');
-    loadDashboard(state.month);
+    loadDashboard(state.month,true);
   }).catch(function(e){
     loading(false);
     if(cb) cb.checked=!done;
     toast('エラー: '+(e.message||e));
-    loadDashboard(state.month);
+    loadDashboard(state.month,true);
   });
 }
 
@@ -815,11 +833,11 @@ function saveEditRow(rowIdx){
     kubun:document.getElementById('ed-kubun').value,item:item,amount:Number(amount),
     tax:document.getElementById('ed-tax').value,note:document.getElementById('ed-note').value.trim()})
     .then(function(res){
-      if(!file){ loading(false); toast('✏️ 修正しました（修正日を記録）'); loadDashboard(month); return; }
+      if(!file){ loading(false); toast('✏️ 修正しました（修正日を記録）'); loadDashboard(month,true); return; }
       loading(true,'資料をアップロード中…');
       return readFileB64(file).then(function(b64){
         return apiAuth('sd_uploadAttachment',{store:storeName,month:month,kind:item,fileName:file.name,mimeType:file.type,b64:b64,revised:true})
-          .then(function(u){ loading(false); toast('✏️ 修正しました（資料「'+u.name+'」も保存）'); loadDashboard(month); });
+          .then(function(u){ loading(false); toast('✏️ 修正しました（資料「'+u.name+'」も保存）'); loadDashboard(month,true); });
       });
     })
     .catch(function(e){ loading(false); toast('修正エラー: '+(e.message||e)); });
@@ -907,7 +925,7 @@ function submitRows(force){
         });
       });
       chain.then(function(){ finishSubmit(res, month, uploaded); })
-        .catch(function(e){ btn.disabled=false; loading(false); toast('明細は登録されましたが資料アップロードでエラー: '+(e.message||e)); loadDashboard(month); });
+        .catch(function(e){ btn.disabled=false; loading(false); toast('明細は登録されましたが資料アップロードでエラー: '+(e.message||e)); loadDashboard(month,true); });
     })
     .catch(function(e){ btn.disabled=false; loading(false); toast('登録エラー: '+(e.message||e)); });
 }
@@ -916,7 +934,7 @@ function finishSubmit(res, month, uploaded){
   document.getElementById('entry-rows').innerHTML='';
   addEntryRow(); addEntryRow(); addEntryRow();
   toast('✅ '+mLabel(res.month)+'分として '+res.added+'件 登録しました'+(uploaded?'（資料'+uploaded+'件も保存）':''));
-  loadDashboard(month);
+  loadDashboard(month,true);
 }
 
 /* ===== PDF／発行 ===== */
@@ -948,7 +966,7 @@ function issueSendByName(storeName){
     loading(false);
     var atc = res.attachCount>1 ? '（添付'+res.attachCount+'件）' : '';
     toast((res.resend?'🔁 再送信: ':'✅ ')+res.fileName+' を送信しました'+atc+'（→ '+res.to+'）');
-    loadDashboard(state.month);
+    loadDashboard(state.month,true);
   }).catch(function(e){ loading(false); toast('送信エラー: '+(e.message||e)); });
 }
 
@@ -980,7 +998,7 @@ function applyCash(){
   apiAuth('sd_cashApply', state.month, stores).then(function(res){
     loading(false);
     toast('✅ '+res.results.join(' ／ '), 6000);
-    loadDashboard(state.month);
+    loadDashboard(state.month,true);
   }).catch(function(e){ loading(false); toast('取込エラー: '+(e.message||e)); });
 }
 
@@ -991,7 +1009,7 @@ function prepareMonth(){
   apiAuth('sd_prepareMonth', state.month).then(function(res){
     loading(false);
     toast('✅ '+res.results.join(' ／ '), 6000);
-    loadDashboard(state.month);
+    loadDashboard(state.month,true);
   }).catch(function(e){ loading(false); toast('エラー: '+(e.message||e)); });
 }
 function setupAutoPrep(){
@@ -1177,7 +1195,7 @@ function submitBulk(){
     .then(function(res){
       loading(false);
       toast('✅ '+res.store+'に「'+res.item+'」を'+res.months.length+'ヶ月分 計上しました');
-      loadDashboard(state.month);
+      loadDashboard(state.month,true);
     })
     .catch(function(e){ loading(false); toast('一括計上エラー: '+(e.message||e)); });
 }
@@ -1271,7 +1289,7 @@ function saveCorp(client){
   apiAuth('sd_saveCorp',corp).then(function(res){
     loading(false); closeModal();
     toast('✅ '+res.client+' の振込先を保存しました');
-    loadSettings(); loadDashboard(state.month);
+    loadSettings(); loadDashboard(state.month,true);
   }).catch(function(e){ loading(false); toast('保存エラー: '+(e.message||e)); });
 }
 
