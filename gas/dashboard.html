@@ -164,7 +164,30 @@
   #loading.show{display:flex}
   .spin{width:18px;height:18px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;margin-right:10px;animation:sp 1s linear infinite}
   @keyframes sp{to{transform:rotate(360deg)}}
-  @media (max-width:640px){ .stores{grid-template-columns:1fr} header.app h1{font-size:16px} }
+  @media (max-width:640px){
+    .wrap{padding:10px 10px 56px}
+    .stores{grid-template-columns:1fr}
+    header.app{padding:10px 0;gap:8px}
+    header.app h1{font-size:16px;width:100%;margin-right:0}
+    header.app .whoami{font-size:11px}
+    .tabs{gap:6px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+    .tabs button{padding:8px 14px;font-size:13px;white-space:nowrap}
+    .toolbar .btn{flex:1 1 auto;font-size:12px;padding:8px 8px}
+    .monthbar select{flex:1;min-width:0}
+    .frow{gap:8px}
+    .frow label{flex:1 1 100%}
+    .frow select,.frow input{min-width:0;width:100%}
+    .modal{max-height:94vh}
+    .modal .mfoot{flex-direction:column-reverse}
+    .modal .mfoot .btn,.modal .mfoot a.btn{width:100%;text-align:center}
+    .pdf-frame{height:70vh}
+    .transfer-box .val{font-size:19px}
+    .store{padding:12px 13px}
+    table.entry th,table.entry td{font-size:12px;padding:5px 4px}
+    #login-view{margin:6vh auto 0;padding:22px 18px}
+    /* スマホでは横長テーブルはスクロール前提。指で横スクロールできる表示に */
+    .matrix-scroll{-webkit-overflow-scrolling:touch}
+  }
 </style>
 </head>
 <body>
