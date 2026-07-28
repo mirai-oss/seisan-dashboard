@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.3';
+var SD_VERSION = 'v5.4';
 var SD_START_MONTH = '2026-03'; // これより前の月はプルダウンに出さない
 var SD_PAID_SHEET = '振込管理_精算ダッシュボード';
 var SD_CORP_SHEET = '法人設定_精算ダッシュボード';
@@ -374,6 +374,8 @@ function sd_paidMap_() {
 
 function sd_setPaid(token, store, monthKey, done, sendMail) {
   var user = sd_auth_(token, true);
+  // 振込済み→未振込に戻す（ロック解除）操作はマスターのみ許可。振込済みにする操作（ロック開始）は本部でも可。
+  if (!done && sd_isLocked_(store, monthKey)) sd_requireMaster_(user);
   var sh = sd_paidSheet_();
   var lastR = sh.getLastRow();
   var row = 0;
@@ -586,17 +588,28 @@ function sd_authSheet_() {
   var sh = ss.getSheetByName(SD_AUTH_SHEET);
   if (!sh) {
     sh = ss.insertSheet(SD_AUTH_SHEET);
-    sh.getRange(1, 1, 1, 6).setValues([['ログインID', 'パスワード', '表示名', '権限（本部/委託先）', '担当店舗（カンマ区切り／全店）', '有効（TRUE/FALSE）']]);
-    var initPw = Utilities.getUuid().split('-')[0]; // ランダムな初期パスワード（実行ログに1回だけ出力）
-    sh.getRange(2, 1, 2, 6).setValues([
+    sh.getRange(1, 1, 1, 6).setValues([['ログインID', 'パスワード', '表示名', '権限（マスター/本部/委託先）', '担当店舗（カンマ区切り／全店）', '有効（TRUE/FALSE）']]);
+    var initPw = Utilities.getUuid().split('-')[0];       // ランダムな初期パスワード（実行ログに1回だけ出力）
+    var initPwM = Utilities.getUuid().split('-')[0];
+    sh.getRange(2, 1, 3, 6).setValues([
+      ['master', initPwM, 'マスター', 'マスター', '全店', 'TRUE'],
       ['honbu', initPw, '本部', '本部', '全店', 'TRUE'],
       ['（例）委託先ID', '（例）パスワード', '委託先の表示名', '委託先', '担当店舗名をカンマ区切りで', 'FALSE']
     ]);
+    Logger.log('マスターアカウントの初期パスワードを発行しました: master / ' + initPwM + '（必ずログイン後に変更してください）');
     Logger.log('本部アカウントの初期パスワードを発行しました: honbu / ' + initPw + '（必ずログイン後に変更してください）');
     sh.setFrozenRows(1);
     sh.autoResizeColumns(1, 6);
   }
   return sh;
+}
+
+/* 権限（本部）シートの生の役職文字列を正規化。マスター > 本部 > 委託先 の3段階。 */
+function sd_normRole_(raw) {
+  var n = sd_norm_(raw);
+  if (n === 'マスター' || n === 'ﾏｽﾀｰ') return 'マスター';
+  if (n === '本部') return '本部';
+  return '委託先';
 }
 
 function sd_findAccount_(id) {
@@ -610,7 +623,7 @@ function sd_findAccount_(id) {
         id: String(vals[i][0]).trim(),
         pw: String(vals[i][1]),
         name: String(vals[i][2]).trim() || String(vals[i][0]).trim(),
-        role: sd_norm_(vals[i][3]) === '本部' ? '本部' : '委託先',
+        role: sd_normRole_(vals[i][3]),
         storesRaw: String(vals[i][4]).trim(),
         enabled: sd_norm_(vals[i][5]).toUpperCase() !== 'FALSE'
       };
@@ -637,8 +650,25 @@ function sd_auth_(token, needHonbu) {
   var raw = token ? CacheService.getScriptCache().get('sdtk_' + token) : null;
   if (!raw) throw new Error('AUTH'); // クライアント側で再ログイン誘導
   var user = JSON.parse(raw);
-  if (needHonbu && user.role !== '本部') throw new Error('この操作は本部アカウントのみ実行できます');
+  if (needHonbu && user.role !== '本部' && user.role !== 'マスター') throw new Error('この操作は本部アカウントのみ実行できます');
   return user;
+}
+
+function sd_requireMaster_(user) {
+  if (user.role !== 'マスター') throw new Error('この操作はマスターアカウントのみ実行できます');
+}
+
+/* 振込済みロック: 対象の店舗・月が振込済みだと、マスター以外は編集不可 */
+function sd_isLocked_(store, monthKey) {
+  var paid = sd_paidMap_();
+  var rec = (paid[sd_norm_(store)] || {})[monthKey];
+  return !!(rec && rec.done);
+}
+function sd_requireUnlocked_(user, store, monthKey) {
+  if (user.role === 'マスター') return;
+  if (sd_isLocked_(store, monthKey)) {
+    throw new Error('🔒「' + store + '」' + sd_monthLabel_(monthKey) + '分は振込済みでロックされています。編集にはマスターアカウントが必要です。');
+  }
 }
 
 function sd_allowedStores_(user, cfg) {
@@ -874,6 +904,7 @@ function sd_getDashboard(token, monthKey) {
         issuedThis: isIssued,
         sent: sentInfo, // {at, fileId, fileName, to} or null
         paid: paidByMonth[monthKey] || null, // {done, date, by} or null
+        locked: !!(paidByMonth[monthKey] && paidByMonth[monthKey].done), // 振込済み＝編集ロック中
         salesCheck: salesCheck // {source, entered, diff, salesName} or null
       }
     };
@@ -908,6 +939,7 @@ function sd_addRows(token, payload) {
     cfg.forEach(function (s) { if (s.name === payload.store) st = s; });
     if (!st) throw new Error('店舗が見つかりません: ' + payload.store);
     if (!st.db) throw new Error('店舗「' + payload.store + '」のDBシートが見つかりません。「' + SD_CONFIG_SHEET + '」で指定してください。');
+    sd_requireUnlocked_(user, payload.store, payload.month);
 
     var ymDate = sd_monthKeyToDate_(payload.month);
     var rows = (payload.rows || []).filter(function (r) { return String(r.item || '').trim(); });
@@ -965,6 +997,15 @@ function sd_updateRow(token, payload) {
     if (sd_norm_(curItem) !== sd_norm_(payload.orig.item) || Math.round(curAmt) !== Math.round(Number(payload.orig.amount))) {
       throw new Error('この行は別の場所で変更されています。再読込してからもう一度修正してください（現在: ' + curItem + ' ¥' + curAmt.toLocaleString() + '）');
     }
+    // 対象行の年月を読み、その月が振込済みならマスター以外は編集不可
+    var rowYm = '';
+    var ymRaw = sh.getRange(row, cm.ym).getValue();
+    if (ymRaw instanceof Date) rowYm = sd_fmtMonth_(ymRaw);
+    else {
+      var mm = String(sh.getRange(row, cm.ym).getDisplayValue()).match(/(\d{4})[\/\-年.](\d{1,2})/);
+      if (mm) rowYm = mm[1] + '-' + ('0' + mm[2]).slice(-2);
+    }
+    if (rowYm) sd_requireUnlocked_(user, payload.store, rowYm);
     var newItem = String(payload.item || '').trim();
     if (!newItem) throw new Error('費目名が空です');
     var newAmt = Number(String(payload.amount).replace(/[¥￥,，\s]/g, ''));
@@ -1051,7 +1092,20 @@ function sd_cashPreview(token, monthKey) {
 
 function sd_cashApply(token, monthKey, storeNames) {
   var user = sd_auth_(token, true);
-  return sd_cashApplyCore_(monthKey, storeNames, user.name, false);
+  // 振込済みの店舗はマスター以外は対象外にする（エラーにせずスキップ）
+  var skipped = [];
+  if (user.role !== 'マスター') {
+    var allowed = [];
+    (storeNames || []).forEach(function (nm) {
+      if (sd_isLocked_(nm, monthKey)) skipped.push(nm + ': 🔒振込済みのためスキップ');
+      else allowed.push(nm);
+    });
+    storeNames = allowed;
+    if (!storeNames.length) return { ok: true, results: skipped.length ? skipped : ['対象店舗がありません'] };
+  }
+  var res = sd_cashApplyCore_(monthKey, storeNames, user.name, false);
+  res.results = skipped.concat(res.results);
+  return res;
 }
 
 /* 現金売上の取込コア（手動API・自動トリガーの両方から使用）。
@@ -1482,13 +1536,14 @@ function sd_prepareMonth(token, monthKey) {
   var lock = LockService.getDocumentLock();
   lock.waitLock(20000);
   try {
-    return sd_prepareMonthCore_(monthKey, user.name);
+    return sd_prepareMonthCore_(monthKey, user.name, user.role !== 'マスター');
   } finally {
     lock.releaseLock();
   }
 }
 
-function sd_prepareMonthCore_(monthKey, editorName) {
+/* skipLocked=true のとき、振込済み（ロック中）の店舗はスキップする */
+function sd_prepareMonthCore_(monthKey, editorName, skipLocked) {
   var det = sd_detect_();
   var cfg = sd_config_(sd_masterStores_(det), det);
   var recur = sd_recurRows_();
@@ -1497,6 +1552,7 @@ function sd_prepareMonthCore_(monthKey, editorName) {
   var results = [];
   cfg.forEach(function (st) {
     if (!st.db) return;
+    if (skipLocked && sd_isLocked_(st.name, monthKey)) { results.push(st.name + ': 🔒振込済みのためスキップ'); return; }
     var rows = sd_readRows_(st.db);
     var cur = {}, toAdd = [];
     rows.forEach(function (r) { if (r.ym === monthKey) cur[sd_norm_(r.kubun) + '|' + sd_norm_(r.item)] = true; });
@@ -1667,6 +1723,7 @@ function sd_uploadAttachment(token, payload) {
   // payload = { store, month, kind, fileName, mimeType, b64, revised }
   // revised=true のときは、同名ファイルが既にあれば上書きせず「【再】費目名_…」で保存する
   var user = sd_auth_(token, true);
+  sd_requireUnlocked_(user, payload.store, payload.month);
   var ext = sd_extConfig_();
   var kind = String(payload.kind || '').trim();
   if (!kind) throw new Error('何の書類か（例: カード売上）を入力してください');
@@ -1793,13 +1850,24 @@ function sd_bulkAdd(token, payload) {
     while (k <= payload.toMonth && guard < 60) { months.push(k); k = sd_addMonths_(k, 1); guard++; }
     if (!months.length) throw new Error('対象月がありません');
 
+    // 振込済みの月はマスター以外スキップ
+    var lockedMonths = [];
+    if (user.role !== 'マスター') {
+      var open = [];
+      months.forEach(function (mk) {
+        if (sd_isLocked_(payload.store, mk)) lockedMonths.push(mk); else open.push(mk);
+      });
+      months = open;
+      if (!months.length) throw new Error('🔒 指定された月はすべて振込済みでロックされています（マスターアカウントが必要です）');
+    }
+
     var row = { kubun: payload.kubun || '変動費', item: item, amount: amt, tax: payload.tax || '10%', note: payload.note || '一括計上' };
     months.forEach(function (mk) {
       sd_appendRows_(st.db, sd_monthKeyToDate_(mk), [row], user.name);
     });
     sd_clearRowsCache_(st.db.sheet);
     sd_log_('一括計上', payload.store, months[0] + '〜' + months[months.length - 1], item + ' ¥' + amt + ' ×' + months.length + 'ヶ月', '', '', user.name, '');
-    return { ok: true, months: months, item: item, amount: amt, store: payload.store };
+    return { ok: true, months: months, item: item, amount: amt, store: payload.store, lockedSkipped: lockedMonths };
   } finally {
     lock.releaseLock();
   }
@@ -1820,7 +1888,7 @@ function sd_getSettings(token) {
     accSh.getRange(2, 1, lastR - 1, 6).getDisplayValues().forEach(function (r) {
       if (String(r[0]).trim()) accounts.push({
         id: String(r[0]).trim(), pw: String(r[1]), name: String(r[2]).trim(),
-        role: sd_norm_(r[3]) === '本部' ? '本部' : '委託先',
+        role: sd_normRole_(r[3]),
         stores: String(r[4]).trim(), enabled: sd_norm_(r[5]).toUpperCase() !== 'FALSE'
       });
     });
@@ -1848,6 +1916,11 @@ function sd_saveAccount(token, acc) {
   var user = sd_auth_(token, true);
   if (!acc || !String(acc.id || '').trim()) throw new Error('ログインIDを入力してください');
   if (!String(acc.pw || '').trim()) throw new Error('パスワードを入力してください');
+  var newRole = sd_normRole_(acc.role);
+  // マスター権限の付与・既存マスターの編集はマスターのみ
+  var existing = sd_findAccount_(String(acc.id).trim());
+  if (newRole === 'マスター' || (existing && existing.role === 'マスター')) sd_requireMaster_(user);
+
   var sh = sd_authSheet_();
   var lastR = sh.getLastRow();
   var row = 0;
@@ -1859,8 +1932,8 @@ function sd_saveAccount(token, acc) {
   }
   var rec = [
     String(acc.id).trim(), String(acc.pw), String(acc.name || acc.id).trim(),
-    acc.role === '本部' ? '本部' : '委託先',
-    String(acc.stores || '').trim() || (acc.role === '本部' ? '全店' : ''),
+    newRole,
+    String(acc.stores || '').trim() || (newRole !== '委託先' ? '全店' : ''),
     acc.enabled === false ? 'FALSE' : 'TRUE'
   ];
   if (row) sh.getRange(row, 1, 1, 6).setValues([rec]);
@@ -1922,6 +1995,20 @@ function sd_updateCheckSheet(token, monthKey) {
 }
 
 /* ---------- 動作確認 ---------- */
+
+/* 既に権限シートがある環境にマスターアカウントを追加する（エディタから1回実行）。
+ * 既に master がいる場合は何もしない。パスワードは実行ログに出力。 */
+function sd_createMasterAccount() {
+  var sh = sd_authSheet_();
+  var existing = sd_findAccount_('master');
+  if (existing) {
+    Logger.log('master アカウントは既に存在します（権限: ' + existing.role + '）。パスワードは権限_精算ダッシュボードシートで確認・変更してください。');
+    return;
+  }
+  var pw = Utilities.getUuid().split('-')[0];
+  sh.appendRow(['master', pw, 'マスター', 'マスター', '全店', 'TRUE']);
+  Logger.log('マスターアカウントを作成しました: master / ' + pw + '（必ずログイン後に変更してください）');
+}
 
 function sd_diagnose() {
   var det = sd_detect_();

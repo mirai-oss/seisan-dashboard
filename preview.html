@@ -79,6 +79,9 @@
   .salescheck .sc-detail{font-weight:400;color:var(--ink2);font-size:12px;margin-top:2px}
   .salescheck .sc-note{font-weight:400;color:var(--ink3);font-size:11px;margin-top:2px}
   .paidline{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink2)}
+  .lockline{font-size:12px;font-weight:700;color:var(--paid);background:var(--paid-bg);border:1px solid #d6cef5;border-radius:8px;padding:6px 10px}
+  .lockline.master{color:var(--good);background:var(--good-bg);border-color:#bfe3cd}
+  .lock-banner{border-radius:var(--radius);padding:12px 16px;margin-bottom:14px;background:var(--paid-bg);border:1px solid #d6cef5;color:var(--paid);font-weight:700;font-size:13px}
   .paidline input{width:16px;height:16px;accent-color:var(--paid)}
   .store .actions{margin-top:auto;display:flex;gap:6px;flex-wrap:wrap}
   .btn{display:inline-block;padding:8px 13px;border-radius:8px;border:1px solid var(--line);background:var(--card);cursor:pointer;font-size:13px;color:var(--ink)}
@@ -196,7 +199,7 @@
 </style>
 </head>
 <body>
-<div style="background:#1f2430;color:#fff;font-size:12px;padding:8px 16px;text-align:center">🔍 プレビュー（サンプル・fetchモック）。honbu / 任意PW でログイン。</div>
+<div style="background:#1f2430;color:#fff;font-size:12px;padding:8px 16px;text-align:center">🔍 プレビュー（サンプル）。master / honbu / fam ＋任意PW でログイン。</div>
 
 <!-- ログイン -->
 <div id="login-view">
@@ -310,6 +313,7 @@
       <span class="big" id="banner-store"></span>
       <span class="note">← 追加する明細はすべてこの「店舗・月」で登録されます。行ごとに月を書く必要はありません。</span>
     </div>
+    <div class="lock-banner" id="input-lock-banner" style="display:none">🔒 この店舗・この月は振込済みのため編集ロック中です。変更するにはマスターアカウントでログインしてください。</div>
     <div class="card">
       <div class="frow">
         <label>店舗
@@ -322,16 +326,18 @@
           <input id="in-editor" placeholder="例: 中山" oninput="localStorage.setItem('sd_editor',this.value)">
         </label>
       </div>
-      <table class="entry">
-        <thead>
-          <tr><th style="width:120px">区分</th><th>費目名</th><th style="width:120px">金額（税込）</th><th style="width:90px">税率</th><th>備考</th><th style="width:150px">📎 資料（任意）</th><th style="width:30px"></th></tr>
-        </thead>
-        <tbody id="entry-rows"></tbody>
-      </table>
-      <div class="entry-actions">
-        <button class="btn" onclick="addEntryRow()">＋ 行を追加</button>
-        <span style="flex:1"></span>
-        <button class="btn primary" id="submit-btn" onclick="submitRows()">この内容で登録する</button>
+      <div id="entry-card">
+        <table class="entry">
+          <thead>
+            <tr><th style="width:120px">区分</th><th>費目名</th><th style="width:120px">金額（税込）</th><th style="width:90px">税率</th><th>備考</th><th style="width:150px">📎 資料（任意）</th><th style="width:30px"></th></tr>
+          </thead>
+          <tbody id="entry-rows"></tbody>
+        </table>
+        <div class="entry-actions">
+          <button class="btn" onclick="addEntryRow()">＋ 行を追加</button>
+          <span style="flex:1"></span>
+          <button class="btn primary" id="submit-btn" onclick="submitRows()">この内容で登録する</button>
+        </div>
       </div>
       <p class="muted">マイナス金額（返金・調整）も入力できます。各行にファイルを添付すると、登録時に「費目名_年.月_店舗名」に自動リネームしてDriveに保存します。</p>
       <div class="existing">
@@ -393,14 +399,14 @@
     ],['ガス料金'],[],{'2026-03':{s:12511491},'2026-04':{s:10491876,p:1},'2026-05':{s:11220450}},null)
   ];}
   var ROLE='本部',NAME='本部';
-  function dash(){var st=stores();if(st[0]){st[0].detail.salesCheck={source:st[0].detail.sales,entered:st[0].detail.sales,diff:0,salesName:st[0].name};}if(st[1]){st[1].detail.salesCheck={source:st[1].detail.sales+120000,entered:st[1].detail.sales,diff:-120000,salesName:st[1].name};}return {ver:'v5.2（プレビュー）',user:{name:NAME,role:ROLE},month:TARGET,monthLabel:'2026年6月',
+  function dash(){var st=stores();if(st[0]){st[0].detail.salesCheck={source:st[0].detail.sales,entered:st[0].detail.sales,diff:0,salesName:st[0].name};st[0].detail.paid={done:true,date:'2026-07-19',by:'本部'};st[0].detail.locked=true;}if(st[1]){st[1].detail.salesCheck={source:st[1].detail.sales+120000,entered:st[1].detail.sales,diff:-120000,salesName:st[1].name};}return {ver:'v5.4（プレビュー）',user:{name:NAME,role:ROLE},month:TARGET,monthLabel:'2026年6月',
     months:MONTHS,stores:ROLE==='本部'?st:st.slice(0,1),
     corps:{'株式会社FAMDining':{account:'三井住友 渋谷 普通 1234567',note:''},'株式会社MostFun':{account:'',note:''}},
     kubunOptions:['売上','変動費','固定ロイヤリティ','変動ロイヤリティ','固定調整'],taxOptions:['10%','8%','対象外'],
     sheetUrl:ROLE==='本部'?'https://example.com':'',updatedAt:'2026-07-18 21:00（サンプル）'};}
   
   var API_MAP = {
-sd_login:function(id,pw){ROLE=(id.indexOf('honbu')>-1)?'本部':'委託先';NAME=ROLE==='本部'?'本部':'FAM Dining様';return ({token:'tk',name:NAME,role:ROLE});},
+sd_login:function(id,pw){ROLE=(id.indexOf('master')>-1)?'マスター':((id.indexOf('honbu')>-1)?'本部':'委託先');NAME=(ROLE==='マスター')?'マスター':((ROLE==='本部')?'本部':'FAM Dining様');return ({token:'tk',name:NAME,role:ROLE});},
       sd_getDashboard:function(t,mk){return (dash());},
       sd_updateRow:function(t,p){EDITED[p.store+'|'+p.row]='7/18 '+NAME;return ({ok:true,row:p.row,item:p.item});},
       sd_setPaid:function(t,s,mk,dn,sm){PAID[s]=dn?{done:true,date:'2026-07-18',by:NAME}:null;return ({ok:true,store:s,month:mk,done:dn,mailed:!!(dn&&sm),to:'sample@example.com'});},
@@ -556,7 +562,10 @@ function shiftMonth(n){
   var d=new Date(Number(p[0]), Number(p[1])-1+n, 1);
   loadDashboard(d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2));
 }
-function isHonbu(){ return state.data && state.data.user.role==='本部'; }
+function isHonbu(){ return state.data && (state.data.user.role==='本部' || state.data.user.role==='マスター'); }
+function isMaster(){ return state.data && state.data.user.role==='マスター'; }
+/* 振込済みロック中かつマスター以外 → 編集不可 */
+function isLockedFor(st){ return !!(st && st.detail && st.detail.locked) && !isMaster(); }
 
 var dashCache={};
 function loadDashboard(monthKey, force){
@@ -587,7 +596,7 @@ function invalidateCache(){ dashCache={}; }
 
 function render(){
   var d=state.data, honbu=isHonbu();
-  document.getElementById('whoami').textContent = d.user.name+'（'+d.user.role+'）';
+  document.getElementById('whoami').textContent = (d.user.role==='マスター'?'👑 ':'')+d.user.name+'（'+d.user.role+'）';
   var link=document.getElementById('sheet-link');
   link.style.display = d.sheetUrl?'':'none';
   if(d.sheetUrl) link.href=d.sheetUrl;
@@ -662,15 +671,28 @@ function renderCards(){
     }
     var sentHtml = dt.sent ? '<div class="sent-note">📨 '+esc(dt.sent.action)+' '+esc(dt.sent.at)+(dt.sent.to?'（→ '+esc(dt.sent.to)+'）':'')+'</div>' : '';
     var checkHtml = salesCheckHtml(dt.salesCheck);
+    var locked = isLockedFor(st); // 振込済み＆マスター以外＝編集ロック
+    var lockHtml = '';
+    if(dt.locked){
+      lockHtml = locked
+        ? '<div class="lockline">🔒 振込済みのため編集ロック中（変更にはマスターアカウントが必要です）</div>'
+        : '<div class="lockline master">🔓 振込済み（マスター権限のため編集できます）</div>';
+    }
+    // 振込済みチェックの解除はマスターのみ（本部はチェックを入れることは可能）
+    var paidCbDisabled = (dt.paid&&dt.paid.done&&!isMaster()) ? ' disabled title="解除にはマスターアカウントが必要です"' : '';
     var paidHtml = honbu
-      ? '<label class="paidline"><input type="checkbox" '+(dt.paid&&dt.paid.done?'checked':'')+' onchange="togglePaid('+idx+',this)"> 振込済みにする'+(dt.paid&&dt.paid.done?'（'+esc(dt.paid.date)+' '+esc(dt.paid.by)+'）':'')+'</label>'
+      ? '<label class="paidline"><input type="checkbox" '+(dt.paid&&dt.paid.done?'checked':'')+paidCbDisabled+' onchange="togglePaid('+idx+',this)"> 振込済みにする'+(dt.paid&&dt.paid.done?'（'+esc(dt.paid.date)+' '+esc(dt.paid.by)+'）':'')+'</label>'
       : (dt.paid&&dt.paid.done?'<div class="paidline">💰 振込済み（'+esc(dt.paid.date)+'）</div>':'');
     var actions='';
     if(honbu){
-      actions='<button class="btn ghost sm" onclick="gotoInput('+idx+')">＋ 入力</button>'
+      actions=(locked
+          ? '<button class="btn ghost sm" disabled title="振込済みのためロック中">＋ 入力</button>'
+          : '<button class="btn ghost sm" onclick="gotoInput('+idx+')">＋ 入力</button>')
         +'<button class="btn sm" onclick="pdfPreview('+idx+')">📄 プレビュー</button>'
         +'<button class="btn primary sm" onclick="issueSend('+idx+')">✉️ 発行して送信</button>'
-        +'<button class="btn sm" onclick="openAttach('+idx+')">📎 添付</button>'
+        +(locked
+          ? '<button class="btn sm" onclick="openAttach('+idx+')">📎 添付を見る</button>'
+          : '<button class="btn sm" onclick="openAttach('+idx+')">📎 添付</button>')
         +'<button class="btn sm" onclick="openTrend('+idx+')">📈 推移</button>';
     } else {
       actions='<button class="btn sm" onclick="pdfPreview('+idx+')">📄 精算書を見る</button>'
@@ -684,7 +706,7 @@ function renderCards(){
       +'<button class="toggle" onclick="var p=document.getElementById(\'sdt-'+idx+'\');p.style.display=p.style.display===\'none\'?\'\':\'none\'">内訳 ▾</button></div>'
       +'<div id="sdt-'+idx+'" style="display:none">'+settleTable(st)+'</div>'
       +'<div class="nums"><span>売上合計<b>'+yen(dt.sales)+'</b></span><span>経費合計<b>'+yen(se.costTotal)+'</b></span><span>明細<b>'+dt.count+'件</b></span></div>'
-      + missHtml + checkHtml + sentHtml + paidHtml
+      + missHtml + checkHtml + sentHtml + lockHtml + paidHtml
       +'<div class="actions">'+actions+'</div>'
       +'</div>';
   }).join('');
@@ -859,6 +881,23 @@ function renderInputView(){
 function updateBanner(){
   document.getElementById('banner-month').textContent=mLabel(document.getElementById('in-month').value)+'分';
   document.getElementById('banner-store').textContent='／ '+document.getElementById('in-store').value;
+  applyInputLock();
+}
+/* 選択中の店舗・月が振込済み（マスター以外）なら入力フォームを無効化 */
+function applyInputLock(){
+  var st=currentStore();
+  var mk=document.getElementById('in-month').value;
+  // ロック判定は「今表示中の月」のデータでのみ可能（他月はサーバー側で拒否される）
+  var locked = (st && mk===state.data.month) ? isLockedFor(st) : false;
+  var banner=document.getElementById('input-lock-banner');
+  if(banner) banner.style.display = locked?'':'none';
+  var card=document.getElementById('entry-card');
+  if(card){
+    card.style.opacity = locked?'0.55':'';
+    card.style.pointerEvents = locked?'none':'';
+  }
+  var btn=document.getElementById('submit-btn');
+  if(btn) btn.disabled = !!locked;
 }
 function onStoreChange(){ updateBanner(); renderExisting(); }
 function onInMonthChange(){ updateBanner(); renderExisting(); }
@@ -884,7 +923,11 @@ function renderExisting(){
   else{
     tbl.innerHTML='<tr><th style="width:70px"></th><th>区分</th><th>費目名</th><th style="text-align:right">金額</th><th>税率</th><th>備考</th><th>入力者</th><th>入力日</th><th>修正日</th></tr>'
       + rows.map(function(r,i){
-        var editBtn = r.row ? '<button class="btn sm" onclick="openEditRow('+i+')">✏️ 修正</button>' : '';
+        var editBtn = r.row
+          ? (isLockedFor(st)
+              ? '<button class="btn sm" disabled title="振込済みのためロック中">✏️ 修正</button>'
+              : '<button class="btn sm" onclick="openEditRow('+i+')">✏️ 修正</button>')
+          : '';
         return '<tr><td>'+editBtn+'</td><td><span class="kubun-tag">'+esc(r.kubun)+'</span></td><td>'+esc(r.item)+'</td><td class="num">'+yen(r.amount)+'</td><td>'+esc(r.tax)+'</td><td>'+esc(r.note)+'</td><td>'+esc(r.editor)+'</td><td>'+esc(r.at)+'</td><td>'+esc(r.edited||'')+'</td></tr>';
       }).join('');
   }
@@ -899,6 +942,7 @@ function renderExisting(){
 /* ---- 入力済み明細の修正（本部） ---- */
 function openEditRow(rowIdx){
   var st=currentStore(); if(!st) return;
+  if(isLockedFor(st)){ toast('🔒 振込済みのためロック中です（マスターアカウントが必要です）'); return; }
   var r=st.detail.rows[rowIdx]; if(!r||!r.row){ toast('この行は修正できません'); return; }
   var d=state.data;
   var kuOpts=d.kubunOptions.map(function(k){return '<option'+(k===r.kubun?' selected':'')+'>'+esc(k)+'</option>';}).join('');
@@ -1316,8 +1360,9 @@ function renderSettings(){
   document.getElementById('acct-table').innerHTML=
     '<tr><th>ログインID</th><th>表示名</th><th>権限</th><th>担当店舗</th><th>有効</th><th></th></tr>'
     + s.accounts.map(function(a,i){
-        return '<tr><td>'+esc(a.id)+'</td><td>'+esc(a.name)+'</td><td>'+esc(a.role)+'</td>'
-          +'<td>'+esc(a.stores||(a.role==='本部'?'全店':''))+'</td>'
+        var roleTag = a.role==='マスター' ? '<span class="st-tag paid">👑 マスター</span>' : esc(a.role);
+        return '<tr><td>'+esc(a.id)+'</td><td>'+esc(a.name)+'</td><td>'+roleTag+'</td>'
+          +'<td>'+esc(a.stores||(a.role!=='委託先'?'全店':''))+'</td>'
           +'<td>'+(a.enabled?'✅':'—')+'</td>'
           +'<td><button class="btn sm" onclick="openAccountModal('+i+')">編集</button></td></tr>';
       }).join('');
@@ -1345,16 +1390,17 @@ function openAccountModal(idx){
   var body='<div class="frow"><label>ログインID<input id="acc-id" value="'+esc(a.id)+'" '+(isNew?'':'readonly')+'></label>'
     +'<label>パスワード<input id="acc-pw" value="'+esc(a.pw)+'"></label>'
     +'<label>表示名<input id="acc-name" value="'+esc(a.name)+'"></label></div>'
-    +'<div class="frow"><label>権限<select id="acc-role" onchange="document.getElementById(\'acc-stores-wrap\').style.display=this.value===\'本部\'?\'none\':\'\'">'
+    +'<div class="frow"><label>権限<select id="acc-role" onchange="document.getElementById(\'acc-stores-wrap\').style.display=this.value===\'委託先\'?\'\':\'none\'">'
+    +(isMaster()?'<option'+(a.role==='マスター'?' selected':'')+'>マスター</option>':'')
     +'<option'+(a.role==='本部'?' selected':'')+'>本部</option><option'+(a.role==='委託先'?' selected':'')+'>委託先</option></select></label>'
     +'<label>有効<select id="acc-enabled"><option value="TRUE"'+(a.enabled?' selected':'')+'>有効</option><option value="FALSE"'+(!a.enabled?' selected':'')+'>無効</option></select></label></div>'
-    +'<div id="acc-stores-wrap" style="'+(a.role==='本部'?'display:none':'')+'"><div class="muted" style="margin-bottom:4px">担当店舗（委託先が閲覧できる店舗）</div>'+storeChecks+'</div>';
+    +'<div id="acc-stores-wrap" style="'+(a.role!=='委託先'?'display:none':'')+'"><div class="muted" style="margin-bottom:4px">担当店舗（委託先が閲覧できる店舗）</div>'+storeChecks+'</div>';
   openModal(isNew?'＋ アカウントを追加':'アカウントを編集: '+esc(a.id), body,
     '<button class="btn primary" onclick="saveAccount()">保存</button><button class="btn" onclick="closeModal()">閉じる</button>');
 }
 function saveAccount(){
   var role=document.getElementById('acc-role').value;
-  var stores = role==='本部' ? '全店'
+  var stores = role!=='委託先' ? '全店'
     : [].slice.call(document.querySelectorAll('.acc-store:checked')).map(function(c){return c.value;}).join(', ');
   var acc={
     id:document.getElementById('acc-id').value.trim(),
