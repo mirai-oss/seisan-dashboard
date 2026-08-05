@@ -471,6 +471,40 @@ function logout(){ showLogin('ログアウトしました'); }
  * パスワードはGASを通らない。委託先はGAS側で対象外として弾かれる。 */
 var SSO_SUPA_URL='https://uuvsxzhpxtghojoubjcc.supabase.co';
 var SSO_SUPA_KEY='sb_publishable_MrwPJAx_Ws_fdRutprKCiQ_dg3wCiTr'; // 公開用キー
+/* ポータル（同一オリジンのns-portal）でログイン済みなら自動ログインする */
+var PORTAL_LS_KEY='nsportal_session_v1';
+function portalAccessToken_(){
+  var s=null;
+  try{ var raw=localStorage.getItem(PORTAL_LS_KEY); s=raw?JSON.parse(raw):null; }catch(e){ return Promise.resolve(null); }
+  if(!s||!s.at) return Promise.resolve(null);
+  return fetch(SSO_SUPA_URL+'/auth/v1/user',{headers:{apikey:SSO_SUPA_KEY,Authorization:'Bearer '+s.at}})
+    .then(function(r){
+      if(r.ok) return s.at;
+      if(!s.rt) return null;
+      return fetch(SSO_SUPA_URL+'/auth/v1/token?grant_type=refresh_token',{
+        method:'POST', headers:{apikey:SSO_SUPA_KEY,'Content-Type':'application/json'},
+        body:JSON.stringify({refresh_token:s.rt})
+      }).then(function(r2){ return r2.ok?r2.json():null; }).then(function(j){
+        if(!j||!j.access_token) return null;
+        try{ localStorage.setItem(PORTAL_LS_KEY, JSON.stringify({at:j.access_token,rt:j.refresh_token,uid:j.user&&j.user.id})); }catch(e){}
+        return j.access_token;
+      });
+    }).catch(function(){ return null; });
+}
+function trySilentPortalLogin(){
+  return portalAccessToken_().then(function(at){
+    if(!at) return;
+    document.getElementById('login-err').textContent='🐔 ポータルのアカウントでログイン中…';
+    return api('sd_supaLogin', at).then(function(res){
+      state.token=res.token;
+      localStorage.setItem('sd_token', res.token);
+      document.getElementById('login-err').textContent='';
+      document.getElementById('login-view').style.display='none';
+      document.getElementById('app-view').style.display='block';
+      loadDashboard(null);
+    }).catch(function(){ document.getElementById('login-err').textContent=''; });
+  });
+}
 function ssoToggle(){
   var f=document.getElementById('sso-form'), b=document.getElementById('sso-open');
   var open=f.style.display==='none';
@@ -1407,6 +1441,7 @@ if(state.token){
   loadDashboard(null);
 } else {
   showLogin('');
+  trySilentPortalLogin();   // ポータルでログイン済みならそのまま入る
 }
 </script>
 </body>
