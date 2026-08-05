@@ -210,6 +210,17 @@
   <label>パスワード</label>
   <input id="login-pw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
   <button onclick="doLogin()">ログイン</button>
+  <div id="sso-box" style="margin-top:18px;border-top:1px solid #ddd;padding-top:14px">
+    <button id="sso-open" onclick="ssoToggle()" style="background:transparent;color:#666;border:1px dashed #aaa">🐔 統合アカウント（ポータル/日報）でログイン</button>
+    <div id="sso-form" style="display:none">
+      <label>統合アカウントのメールアドレス</label>
+      <input id="sso-email" type="email" autocomplete="username" placeholder="ポータル/日報と同じメール">
+      <label>パスワード</label>
+      <input id="sso-pw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doSsoLogin()">
+      <button onclick="doSsoLogin()">🐔 統合アカウントでログイン</button>
+      <p class="muted" style="font-size:12px;margin-top:8px">※ 業務委託先の方は上のIDとパスワードでログインしてください。</p>
+    </div>
+  </div>
 </div>
 
 <!-- 本体 -->
@@ -454,6 +465,47 @@ function doLogin(){
   }).catch(function(e){ loading(false); document.getElementById('login-err').textContent=(e.message||e); });
 }
 function logout(){ showLogin('ログアウトしました'); }
+
+/* ===== 統合アカウント（ポータル／日報Supabase）でログイン =====
+ * ブラウザ→Supabaseで認証し、得たaccess_tokenをGASへ渡してセッションに引き換える。
+ * パスワードはGASを通らない。委託先はGAS側で対象外として弾かれる。 */
+var SSO_SUPA_URL='https://uuvsxzhpxtghojoubjcc.supabase.co';
+var SSO_SUPA_KEY='sb_publishable_MrwPJAx_Ws_fdRutprKCiQ_dg3wCiTr'; // 公開用キー
+function ssoToggle(){
+  var f=document.getElementById('sso-form'), b=document.getElementById('sso-open');
+  var open=f.style.display==='none';
+  f.style.display=open?'':'none'; b.style.display=open?'none':'';
+  if(open) document.getElementById('sso-email').focus();
+}
+function doSsoLogin(){
+  var email=document.getElementById('sso-email').value.trim();
+  var pw=document.getElementById('sso-pw').value;
+  var err=document.getElementById('login-err');
+  if(!email||!pw){ err.textContent='メールアドレスとパスワードを入れてください'; return; }
+  err.textContent='';
+  loading(true,'認証中…');
+  fetch(SSO_SUPA_URL+'/auth/v1/token?grant_type=password',{
+    method:'POST', headers:{apikey:SSO_SUPA_KEY,'Content-Type':'application/json'},
+    body:JSON.stringify({email:email,password:pw})
+  }).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
+  .then(function(res){
+    if(!res.ok) throw new Error(res.j&&res.j.error_code==='invalid_credentials'
+      ?'メールアドレスまたはパスワードが違います':'統合アカウントの認証に失敗しました');
+    return api('sd_supaLogin', res.j.access_token);
+  }).then(function(res){
+    state.token=res.token;
+    localStorage.setItem('sd_token', res.token);
+    loading(false);
+    document.getElementById('login-view').style.display='none';
+    document.getElementById('app-view').style.display='block';
+    loadDashboard(null);
+  }).catch(function(e){
+    loading(false);
+    var m=String(e.message||e);
+    if(m.indexOf('許可されていない呼び出し')>-1) m='サーバー側の更新（GAS再デプロイ）がまだのため、統合ログインはもう少し先になります';
+    err.textContent=m;
+  });
+}
 
 /* ===== 表示 ===== */
 function showView(v){
@@ -1303,6 +1355,8 @@ function openAccountModal(idx){
     +(isMaster()?'<option'+(a.role==='マスター'?' selected':'')+'>マスター</option>':'')
     +'<option'+(a.role==='本部'?' selected':'')+'>本部</option><option'+(a.role==='委託先'?' selected':'')+'>委託先</option></select></label>'
     +'<label>有効<select id="acc-enabled"><option value="TRUE"'+(a.enabled?' selected':'')+'>有効</option><option value="FALSE"'+(!a.enabled?' selected':'')+'>無効</option></select></label></div>'
+    +'<div class="frow"><label style="flex:1">統合アカウントのメール（ポータル／日報と共通ログイン。委託先は対象外）'
+    +'<input id="acc-email" type="email" value="'+esc(a.email||'')+'" placeholder="例: taro@ns0314.com（空欄＝統合ログイン不可）"></label></div>'
     +'<div id="acc-stores-wrap" style="'+(a.role!=='委託先'?'display:none':'')+'"><div class="muted" style="margin-bottom:4px">担当店舗（委託先が閲覧できる店舗）</div>'+storeChecks+'</div>';
   openModal(isNew?'＋ アカウントを追加':'アカウントを編集: '+esc(a.id), body,
     '<button class="btn primary" onclick="saveAccount()">保存</button><button class="btn" onclick="closeModal()">閉じる</button>');
@@ -1316,7 +1370,8 @@ function saveAccount(){
     pw:document.getElementById('acc-pw').value,
     name:document.getElementById('acc-name').value.trim(),
     role:role, stores:stores,
-    enabled:document.getElementById('acc-enabled').value==='TRUE'
+    enabled:document.getElementById('acc-enabled').value==='TRUE',
+    email:(document.getElementById('acc-email')||{value:''}).value.trim().toLowerCase()
   };
   if(!acc.id){ toast('ログインIDを入れてください'); return; }
   if(!acc.pw){ toast('パスワードを入れてください'); return; }

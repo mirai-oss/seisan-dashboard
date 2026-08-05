@@ -17,7 +17,13 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.4';
+var SD_VERSION = 'v5.5-sso';
+
+// 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
+// キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
+// ※業務委託先は統合アカウントを持たない方針のため、SSOで入れるのは本部・マスターのみ。
+var SD_SSO_SUPA_URL = 'https://uuvsxzhpxtghojoubjcc.supabase.co';
+var SD_SSO_SUPA_KEY = 'sb_publishable_MrwPJAx_Ws_fdRutprKCiQ_dg3wCiTr';
 var SD_START_MONTH = '2026-03'; // これより前の月はプルダウンに出さない
 var SD_PAID_SHEET = '振込管理_精算ダッシュボード';
 var SD_CORP_SHEET = '法人設定_精算ダッシュボード';
@@ -35,7 +41,7 @@ var SD_KUBUN_OPTIONS = ['売上', '変動費', '固定ロイヤリティ', '変�
  * 呼べる関数はここに明示的に列挙したものだけ（それ以外は拒否）。
  * sd_login 以外は全て第1引数がtoken（内部の sd_auth_ が権限検証する）。 */
 var SD_API_WHITELIST = [
-  'sd_login', 'sd_getDashboard', 'sd_addRows', 'sd_updateRow', 'sd_setPaid',
+  'sd_login', 'sd_supaLogin', 'sd_getDashboard', 'sd_addRows', 'sd_updateRow', 'sd_setPaid',
   'sd_pdfPreview', 'sd_issueAndSend', 'sd_cashPreview', 'sd_cashApply',
   'sd_prepareMonth', 'sd_setupAutoPrep', 'sd_uploadAttachment', 'sd_listAttachments',
   'sd_getPdfB64', 'sd_updateCheckSheet', 'sd_bulkAdd', 'sd_getSettings',
@@ -44,7 +50,7 @@ var SD_API_WHITELIST = [
 
 function sd_apiFnMap_() {
   return {
-    sd_login: sd_login, sd_getDashboard: sd_getDashboard, sd_addRows: sd_addRows,
+    sd_login: sd_login, sd_supaLogin: sd_supaLogin, sd_getDashboard: sd_getDashboard, sd_addRows: sd_addRows,
     sd_updateRow: sd_updateRow, sd_setPaid: sd_setPaid, sd_pdfPreview: sd_pdfPreview,
     sd_issueAndSend: sd_issueAndSend, sd_cashPreview: sd_cashPreview, sd_cashApply: sd_cashApply,
     sd_prepareMonth: sd_prepareMonth, sd_setupAutoPrep: sd_setupAutoPrep,
@@ -588,7 +594,7 @@ function sd_authSheet_() {
   var sh = ss.getSheetByName(SD_AUTH_SHEET);
   if (!sh) {
     sh = ss.insertSheet(SD_AUTH_SHEET);
-    sh.getRange(1, 1, 1, 6).setValues([['ログインID', 'パスワード', '表示名', '権限（マスター/本部/委託先）', '担当店舗（カンマ区切り／全店）', '有効（TRUE/FALSE）']]);
+    sh.getRange(1, 1, 1, 7).setValues([['ログインID', 'パスワード', '表示名', '権限（マスター/本部/委託先）', '担当店舗（カンマ区切り／全店）', '有効（TRUE/FALSE）', 'メール（統合ログイン用）']]);
     var initPw = Utilities.getUuid().split('-')[0];       // ランダムな初期パスワード（実行ログに1回だけ出力）
     var initPwM = Utilities.getUuid().split('-')[0];
     sh.getRange(2, 1, 3, 6).setValues([
@@ -599,7 +605,11 @@ function sd_authSheet_() {
     Logger.log('マスターアカウントの初期パスワードを発行しました: master / ' + initPwM + '（必ずログイン後に変更してください）');
     Logger.log('本部アカウントの初期パスワードを発行しました: honbu / ' + initPw + '（必ずログイン後に変更してください）');
     sh.setFrozenRows(1);
-    sh.autoResizeColumns(1, 6);
+    sh.autoResizeColumns(1, 7);
+  } else if (String(sh.getRange(1, 7).getDisplayValue()).trim() === '') {
+    // 既存シートにG列「メール」が無ければ見出しを追加（統合ログインの突き合わせ用）
+    sh.getRange(1, 7).setValue('メール（統合ログイン用）');
+    sh.getRange(1, 7).setNote('N-Styleポータル／日報と共通のメールアドレス。\nここに入れると「統合アカウントでログイン」でこの行の権限が使えます。\n空欄＝統合ログイン不可（従来のID/パスワードのみ）。\n※業務委託先は統合アカウントの対象外です。');
   }
   return sh;
 }
@@ -616,7 +626,7 @@ function sd_findAccount_(id) {
   var sh = sd_authSheet_();
   var lastR = sh.getLastRow();
   if (lastR < 2) return null;
-  var vals = sh.getRange(2, 1, lastR - 1, 6).getDisplayValues();
+  var vals = sh.getRange(2, 1, lastR - 1, 7).getDisplayValues();
   for (var i = 0; i < vals.length; i++) {
     if (String(vals[i][0]).trim() === String(id).trim()) {
       return {
@@ -625,7 +635,31 @@ function sd_findAccount_(id) {
         name: String(vals[i][2]).trim() || String(vals[i][0]).trim(),
         role: sd_normRole_(vals[i][3]),
         storesRaw: String(vals[i][4]).trim(),
-        enabled: sd_norm_(vals[i][5]).toUpperCase() !== 'FALSE'
+        enabled: sd_norm_(vals[i][5]).toUpperCase() !== 'FALSE',
+        email: String(vals[i][6] || '').trim().toLowerCase()
+      };
+    }
+  }
+  return null;
+}
+
+/* メールから権限行を探す（統合ログイン用） */
+function sd_findAccountByEmail_(email) {
+  var sh = sd_authSheet_();
+  var lastR = sh.getLastRow();
+  if (lastR < 2) return null;
+  var target = String(email || '').trim().toLowerCase();
+  if (!target) return null;
+  var vals = sh.getRange(2, 1, lastR - 1, 7).getDisplayValues();
+  for (var i = 0; i < vals.length; i++) {
+    if (String(vals[i][6] || '').trim().toLowerCase() === target) {
+      return {
+        id: String(vals[i][0]).trim(),
+        name: String(vals[i][2]).trim() || String(vals[i][0]).trim(),
+        role: sd_normRole_(vals[i][3]),
+        storesRaw: String(vals[i][4]).trim(),
+        enabled: sd_norm_(vals[i][5]).toUpperCase() !== 'FALSE',
+        email: target
       };
     }
   }
@@ -640,6 +674,38 @@ function sd_login(id, pw) {
     Utilities.sleep(500);
     throw new Error('IDまたはパスワードが違います');
   }
+  var token = Utilities.getUuid();
+  var user = { id: acc.id, name: acc.name, role: acc.role, storesRaw: acc.storesRaw };
+  CacheService.getScriptCache().put('sdtk_' + token, JSON.stringify(user), 21600); // 6時間
+  return { token: token, name: acc.name, role: acc.role };
+}
+
+/* 統合アカウント（N-Styleポータル／日報Supabase）でログイン。
+ * ブラウザ側がSupabaseにメール+パスワードでログインして得た access_token を受け取り、
+ * Supabaseの /auth/v1/user で検証する（＝パスワードはこのGASを通らない）。
+ * 検証OKなら権限シートG列「メール」と突き合わせて、通常と同じセッションを発行する。
+ * 業務委託先は統合アカウントの対象外（本部・マスターのみ）。 */
+function sd_supaLogin(stoken) {
+  if (!stoken) throw new Error('統合アカウントのトークンがありません');
+  var res;
+  try {
+    res = UrlFetchApp.fetch(SD_SSO_SUPA_URL + '/auth/v1/user', {
+      headers: { apikey: SD_SSO_SUPA_KEY, Authorization: 'Bearer ' + stoken },
+      muteHttpExceptions: true
+    });
+  } catch (e) {
+    throw new Error('統合アカウントの確認に失敗しました: ' + e.message);
+  }
+  if (res.getResponseCode() !== 200) throw new Error('統合アカウントの認証が無効です。もう一度ログインしてください');
+  var email = '';
+  try { email = String(JSON.parse(res.getContentText()).email || '').trim().toLowerCase(); } catch (e) { /* 下で弾く */ }
+  if (!email) throw new Error('統合アカウントのメールアドレスを取得できませんでした');
+
+  var acc = sd_findAccountByEmail_(email);
+  if (!acc) throw new Error('このメール（' + email + '）に対応する精算ダッシュボードのアカウントがありません。設定タブの「メール」欄に登録してください');
+  if (!acc.enabled) throw new Error('このアカウントは無効化されています');
+  if (acc.role === '委託先') throw new Error('業務委託先アカウントは統合ログインの対象外です。従来のIDとパスワードでログインしてください');
+
   var token = Utilities.getUuid();
   var user = { id: acc.id, name: acc.name, role: acc.role, storesRaw: acc.storesRaw };
   CacheService.getScriptCache().put('sdtk_' + token, JSON.stringify(user), 21600); // 6時間
@@ -1885,11 +1951,12 @@ function sd_getSettings(token) {
   var accounts = [];
   var lastR = accSh.getLastRow();
   if (lastR > 1) {
-    accSh.getRange(2, 1, lastR - 1, 6).getDisplayValues().forEach(function (r) {
+    accSh.getRange(2, 1, lastR - 1, 7).getDisplayValues().forEach(function (r) {
       if (String(r[0]).trim()) accounts.push({
         id: String(r[0]).trim(), pw: String(r[1]), name: String(r[2]).trim(),
         role: sd_normRole_(r[3]),
-        stores: String(r[4]).trim(), enabled: sd_norm_(r[5]).toUpperCase() !== 'FALSE'
+        stores: String(r[4]).trim(), enabled: sd_norm_(r[5]).toUpperCase() !== 'FALSE',
+        email: String(r[6] || '').trim().toLowerCase()
       });
     });
   }
@@ -1930,13 +1997,16 @@ function sd_saveAccount(token, acc) {
       if (String(ids[i][0]).trim() === String(acc.id).trim()) { row = i + 2; break; }
     }
   }
+  // 委託先は統合アカウントの対象外なのでメールは保存しない
+  var email = newRole === '委託先' ? '' : String(acc.email || '').trim().toLowerCase();
   var rec = [
     String(acc.id).trim(), String(acc.pw), String(acc.name || acc.id).trim(),
     newRole,
     String(acc.stores || '').trim() || (newRole !== '委託先' ? '全店' : ''),
-    acc.enabled === false ? 'FALSE' : 'TRUE'
+    acc.enabled === false ? 'FALSE' : 'TRUE',
+    email
   ];
-  if (row) sh.getRange(row, 1, 1, 6).setValues([rec]);
+  if (row) sh.getRange(row, 1, 1, 7).setValues([rec]);
   else sh.appendRow(rec);
   return { ok: true, id: rec[0], updated: !!row };
 }
