@@ -88,6 +88,7 @@
   .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
   .btn.primary:disabled,.btn:disabled{opacity:.5;cursor:default}
   .btn.ghost{color:var(--accent);border-color:var(--accent-soft);background:var(--accent-soft)}
+  .btn.danger{color:var(--bad);border-color:#f3c4bd;background:var(--bad-bg)}
   .btn.sm{padding:6px 10px;font-size:12px}
 
   /* 法人別 */
@@ -211,6 +212,17 @@
   <label>パスワード</label>
   <input id="login-pw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
   <button onclick="doLogin()">ログイン</button>
+  <div id="sso-box" style="margin-top:18px;border-top:1px solid #ddd;padding-top:14px">
+    <button id="sso-open" onclick="ssoToggle()" style="background:transparent;color:#666;border:1px dashed #aaa">🐔 統合アカウント（ポータル/日報）でログイン</button>
+    <div id="sso-form" style="display:none">
+      <label>統合アカウントのメールアドレス</label>
+      <input id="sso-email" type="email" autocomplete="username" placeholder="ポータル/日報と同じメール">
+      <label>パスワード</label>
+      <input id="sso-pw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doSsoLogin()">
+      <button onclick="doSsoLogin()">🐔 統合アカウントでログイン</button>
+      <p class="muted" style="font-size:12px;margin-top:8px">※ 業務委託先の方は上のIDとパスワードでログインしてください。</p>
+    </div>
+  </div>
 </div>
 
 <!-- 本体 -->
@@ -409,6 +421,7 @@
 sd_login:function(id,pw){ROLE=(id.indexOf('master')>-1)?'マスター':((id.indexOf('honbu')>-1)?'本部':'委託先');NAME=(ROLE==='マスター')?'マスター':((ROLE==='本部')?'本部':'FAM Dining様');return ({token:'tk',name:NAME,role:ROLE});},
       sd_getDashboard:function(t,mk){return (dash());},
       sd_updateRow:function(t,p){EDITED[p.store+'|'+p.row]='7/18 '+NAME;return ({ok:true,row:p.row,item:p.item});},
+      sd_deleteRow:function(t,p){return ({ok:true,item:p.orig.item,amount:p.orig.amount});},
       sd_setPaid:function(t,s,mk,dn,sm){PAID[s]=dn?{done:true,date:'2026-07-18',by:NAME}:null;return ({ok:true,store:s,month:mk,done:dn,mailed:!!(dn&&sm),to:'sample@example.com'});},
       sd_addRows:function(t,p){return ({ok:true,added:p.rows.length,sheet:'（プレビュー）',month:p.month});},
       sd_uploadAttachment:function(t,p){return ({ok:true,name:p.kind+'_2026.06_'+p.store+'.pdf',url:'#',folder:'2026年6月／'+p.store});},
@@ -545,6 +558,81 @@ function doLogin(){
   }).catch(function(e){ loading(false); document.getElementById('login-err').textContent=(e.message||e); });
 }
 function logout(){ showLogin('ログアウトしました'); }
+
+/* ===== 統合アカウント（ポータル／日報Supabase）でログイン =====
+ * ブラウザ→Supabaseで認証し、得たaccess_tokenをGASへ渡してセッションに引き換える。
+ * パスワードはGASを通らない。委託先はGAS側で対象外として弾かれる。 */
+var SSO_SUPA_URL='https://uuvsxzhpxtghojoubjcc.supabase.co';
+var SSO_SUPA_KEY='sb_publishable_MrwPJAx_Ws_fdRutprKCiQ_dg3wCiTr'; // 公開用キー
+/* ポータル（同一オリジンのns-portal）でログイン済みなら自動ログインする */
+var PORTAL_LS_KEY='nsportal_session_v1';
+function portalAccessToken_(){
+  var s=null;
+  try{ var raw=localStorage.getItem(PORTAL_LS_KEY); s=raw?JSON.parse(raw):null; }catch(e){ return Promise.resolve(null); }
+  if(!s||!s.at) return Promise.resolve(null);
+  return fetch(SSO_SUPA_URL+'/auth/v1/user',{headers:{apikey:SSO_SUPA_KEY,Authorization:'Bearer '+s.at}})
+    .then(function(r){
+      if(r.ok) return s.at;
+      if(!s.rt) return null;
+      return fetch(SSO_SUPA_URL+'/auth/v1/token?grant_type=refresh_token',{
+        method:'POST', headers:{apikey:SSO_SUPA_KEY,'Content-Type':'application/json'},
+        body:JSON.stringify({refresh_token:s.rt})
+      }).then(function(r2){ return r2.ok?r2.json():null; }).then(function(j){
+        if(!j||!j.access_token) return null;
+        try{ localStorage.setItem(PORTAL_LS_KEY, JSON.stringify({at:j.access_token,rt:j.refresh_token,uid:j.user&&j.user.id})); }catch(e){}
+        return j.access_token;
+      });
+    }).catch(function(){ return null; });
+}
+function trySilentPortalLogin(){
+  return portalAccessToken_().then(function(at){
+    if(!at) return;
+    document.getElementById('login-err').textContent='🐔 ポータルのアカウントでログイン中…';
+    return api('sd_supaLogin', at).then(function(res){
+      state.token=res.token;
+      localStorage.setItem('sd_token', res.token);
+      document.getElementById('login-err').textContent='';
+      document.getElementById('login-view').style.display='none';
+      document.getElementById('app-view').style.display='block';
+      loadDashboard(null);
+    }).catch(function(){ document.getElementById('login-err').textContent=''; });
+  });
+}
+function ssoToggle(){
+  var f=document.getElementById('sso-form'), b=document.getElementById('sso-open');
+  var open=f.style.display==='none';
+  f.style.display=open?'':'none'; b.style.display=open?'none':'';
+  if(open) document.getElementById('sso-email').focus();
+}
+function doSsoLogin(){
+  var email=document.getElementById('sso-email').value.trim();
+  var pw=document.getElementById('sso-pw').value;
+  var err=document.getElementById('login-err');
+  if(!email||!pw){ err.textContent='メールアドレスとパスワードを入れてください'; return; }
+  err.textContent='';
+  loading(true,'認証中…');
+  fetch(SSO_SUPA_URL+'/auth/v1/token?grant_type=password',{
+    method:'POST', headers:{apikey:SSO_SUPA_KEY,'Content-Type':'application/json'},
+    body:JSON.stringify({email:email,password:pw})
+  }).then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
+  .then(function(res){
+    if(!res.ok) throw new Error(res.j&&res.j.error_code==='invalid_credentials'
+      ?'メールアドレスまたはパスワードが違います':'統合アカウントの認証に失敗しました');
+    return api('sd_supaLogin', res.j.access_token);
+  }).then(function(res){
+    state.token=res.token;
+    localStorage.setItem('sd_token', res.token);
+    loading(false);
+    document.getElementById('login-view').style.display='none';
+    document.getElementById('app-view').style.display='block';
+    loadDashboard(null);
+  }).catch(function(e){
+    loading(false);
+    var m=String(e.message||e);
+    if(m.indexOf('許可されていない呼び出し')>-1) m='サーバー側の更新（GAS再デプロイ）がまだのため、統合ログインはもう少し先になります';
+    err.textContent=m;
+  });
+}
 
 /* ===== 表示 ===== */
 function showView(v){
@@ -921,14 +1009,20 @@ function renderExisting(){
   title.textContent=mLabel(mk)+' の入力済み明細（'+rows.length+'件）';
   if(!rows.length){ tbl.innerHTML='<tr><td class="muted">まだ入力がありません</td></tr>'; }
   else{
-    tbl.innerHTML='<tr><th style="width:70px"></th><th>区分</th><th>費目名</th><th style="text-align:right">金額</th><th>税率</th><th>備考</th><th>入力者</th><th>入力日</th><th>修正日</th></tr>'
+    tbl.innerHTML='<tr><th style="width:130px"></th><th>区分</th><th>費目名</th><th style="text-align:right">金額</th><th>税率</th><th>備考</th><th>入力者</th><th>入力日</th><th>修正日</th></tr>'
       + rows.map(function(r,i){
+        var locked = isLockedFor(st);
         var editBtn = r.row
-          ? (isLockedFor(st)
+          ? (locked
               ? '<button class="btn sm" disabled title="振込済みのためロック中">✏️ 修正</button>'
               : '<button class="btn sm" onclick="openEditRow('+i+')">✏️ 修正</button>')
           : '';
-        return '<tr><td>'+editBtn+'</td><td><span class="kubun-tag">'+esc(r.kubun)+'</span></td><td>'+esc(r.item)+'</td><td class="num">'+yen(r.amount)+'</td><td>'+esc(r.tax)+'</td><td>'+esc(r.note)+'</td><td>'+esc(r.editor)+'</td><td>'+esc(r.at)+'</td><td>'+esc(r.edited||'')+'</td></tr>';
+        var delBtn = r.row
+          ? (locked
+              ? '<button class="btn sm" disabled title="振込済みのためロック中">🗑 削除</button>'
+              : '<button class="btn sm danger" onclick="deleteRow('+i+')">🗑 削除</button>')
+          : '';
+        return '<tr><td>'+editBtn+' '+delBtn+'</td><td><span class="kubun-tag">'+esc(r.kubun)+'</span></td><td>'+esc(r.item)+'</td><td class="num">'+yen(r.amount)+'</td><td>'+esc(r.tax)+'</td><td>'+esc(r.note)+'</td><td>'+esc(r.editor)+'</td><td>'+esc(r.at)+'</td><td>'+esc(r.edited||'')+'</td></tr>';
       }).join('');
   }
   var dt=st.detail;
@@ -982,6 +1076,23 @@ function saveEditRow(rowIdx){
       });
     })
     .catch(function(e){ loading(false); toast('修正エラー: '+(e.message||e)); });
+}
+
+/* ---- 入力済み明細の削除（本部/マスター。振込済みロック中はマスターのみ） ---- */
+function deleteRow(rowIdx){
+  var st=currentStore(); if(!st) return;
+  if(isLockedFor(st)){ toast('🔒 振込済みのためロック中です（マスターアカウントが必要です）'); return; }
+  var r=st.detail.rows[rowIdx]; if(!r||!r.row){ toast('この行は削除できません'); return; }
+  var ok=confirm('【削除の確認】この明細を削除します。元に戻せません。\n\n'
+    +'店舗：'+st.name+'\n対象月：'+mLabel(state.month)+'分\n区分：'+r.kubun+'\n費目名：'+r.item+'\n金額：'+yen(r.amount)
+    +(r.note?'\n備考：'+r.note:'')
+    +'\n\n本当に削除してよろしいですか？');
+  if(!ok) return;
+  loading(true,'削除中…');
+  var month=state.month;
+  apiAuth('sd_deleteRow',{store:st.name,row:r.row,orig:{item:r.item,amount:r.amount}})
+    .then(function(res){ loading(false); toast('🗑 削除しました：'+res.item+'（'+yen(res.amount)+'）'); loadDashboard(month,true); })
+    .catch(function(e){ loading(false); toast('削除エラー: '+(e.message||e)); });
 }
 
 function prefillItem(name){
@@ -1119,14 +1230,14 @@ function openCashModal(){
     var rows=res.items.map(function(it){
       var stateHtml, check='';
       if(it.amount==null){ stateHtml='<span class="muted">売上シートにデータなし</span>'; }
-      else if(it.already.length){ stateHtml='<span class="mchip cat">既に入力あり: '+esc(it.already.join(' / '))+'</span>'; }
+      else if(it.already.length){ stateHtml='<span class="mchip cat">既に入力あり（チェックすると上書き更新）: '+esc(it.already.join(' / '))+'</span>'; }
       else { stateHtml='<span class="ok-note">取込可</span>'; check='checked'; }
       var box=it.amount!=null?'<input type="checkbox" class="cash-check" data-store="'+esc(it.store)+'" '+check+'>':'';
       return '<tr><td>'+box+'</td><td>'+esc(it.store)+'<br><span class="muted">'+esc(it.salesName)+'</span></td>'
         +'<td class="num">'+(it.amount!=null?yen(it.amount):'－')+'</td><td>'+(it.days||'－')+'日</td><td>'+stateHtml+'</td></tr>';
     }).join('');
     openModal('💴 現金売上の取込　'+res.monthLabel+'分',
-      '<p class="muted" style="margin-bottom:8px">【サーバー】ダッシュボード「分析_日別店舗」T列（現金）の月合計です。チェックした店舗に「◯月現金売上」として登録します。</p>'
+      '<p class="muted" style="margin-bottom:8px">【サーバー】ダッシュボード「分析_日別店舗」T列（現金）の月合計です。チェックした店舗に「◯月現金売上」として登録します。既に入力済みの店舗は、新規追加ではなく既存の行を上書き更新します（重複しません）。</p>'
       +'<div class="matrix-scroll"><table class="entry"><tr><th></th><th>店舗</th><th style="text-align:right">現金売上合計</th><th>日数</th><th>状態</th></tr>'+rows+'</table></div>',
       '<button class="btn primary" onclick="applyCash()">チェックした店舗に登録する</button><button class="btn" onclick="closeModal()">閉じる</button>');
   }).catch(function(e){ loading(false); toast('集計エラー: '+(e.message||e)); });
@@ -1394,6 +1505,8 @@ function openAccountModal(idx){
     +(isMaster()?'<option'+(a.role==='マスター'?' selected':'')+'>マスター</option>':'')
     +'<option'+(a.role==='本部'?' selected':'')+'>本部</option><option'+(a.role==='委託先'?' selected':'')+'>委託先</option></select></label>'
     +'<label>有効<select id="acc-enabled"><option value="TRUE"'+(a.enabled?' selected':'')+'>有効</option><option value="FALSE"'+(!a.enabled?' selected':'')+'>無効</option></select></label></div>'
+    +'<div class="frow"><label style="flex:1">統合アカウントのメール（ポータル／日報と共通ログイン。委託先は対象外）'
+    +'<input id="acc-email" type="email" value="'+esc(a.email||'')+'" placeholder="例: taro@ns0314.com（空欄＝統合ログイン不可）"></label></div>'
     +'<div id="acc-stores-wrap" style="'+(a.role!=='委託先'?'display:none':'')+'"><div class="muted" style="margin-bottom:4px">担当店舗（委託先が閲覧できる店舗）</div>'+storeChecks+'</div>';
   openModal(isNew?'＋ アカウントを追加':'アカウントを編集: '+esc(a.id), body,
     '<button class="btn primary" onclick="saveAccount()">保存</button><button class="btn" onclick="closeModal()">閉じる</button>');
@@ -1407,7 +1520,8 @@ function saveAccount(){
     pw:document.getElementById('acc-pw').value,
     name:document.getElementById('acc-name').value.trim(),
     role:role, stores:stores,
-    enabled:document.getElementById('acc-enabled').value==='TRUE'
+    enabled:document.getElementById('acc-enabled').value==='TRUE',
+    email:(document.getElementById('acc-email')||{value:''}).value.trim().toLowerCase()
   };
   if(!acc.id){ toast('ログインIDを入れてください'); return; }
   if(!acc.pw){ toast('パスワードを入れてください'); return; }
@@ -1443,6 +1557,7 @@ if(state.token){
   loadDashboard(null);
 } else {
   showLogin('');
+  trySilentPortalLogin();   // ポータルでログイン済みならそのまま入る
 }
 </script>
 </body>

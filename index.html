@@ -88,6 +88,7 @@
   .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
   .btn.primary:disabled,.btn:disabled{opacity:.5;cursor:default}
   .btn.ghost{color:var(--accent);border-color:var(--accent-soft);background:var(--accent-soft)}
+  .btn.danger{color:var(--bad);border-color:#f3c4bd;background:var(--bad-bg)}
   .btn.sm{padding:6px 10px;font-size:12px}
 
   /* 法人別 */
@@ -916,14 +917,20 @@ function renderExisting(){
   title.textContent=mLabel(mk)+' の入力済み明細（'+rows.length+'件）';
   if(!rows.length){ tbl.innerHTML='<tr><td class="muted">まだ入力がありません</td></tr>'; }
   else{
-    tbl.innerHTML='<tr><th style="width:70px"></th><th>区分</th><th>費目名</th><th style="text-align:right">金額</th><th>税率</th><th>備考</th><th>入力者</th><th>入力日</th><th>修正日</th></tr>'
+    tbl.innerHTML='<tr><th style="width:130px"></th><th>区分</th><th>費目名</th><th style="text-align:right">金額</th><th>税率</th><th>備考</th><th>入力者</th><th>入力日</th><th>修正日</th></tr>'
       + rows.map(function(r,i){
+        var locked = isLockedFor(st);
         var editBtn = r.row
-          ? (isLockedFor(st)
+          ? (locked
               ? '<button class="btn sm" disabled title="振込済みのためロック中">✏️ 修正</button>'
               : '<button class="btn sm" onclick="openEditRow('+i+')">✏️ 修正</button>')
           : '';
-        return '<tr><td>'+editBtn+'</td><td><span class="kubun-tag">'+esc(r.kubun)+'</span></td><td>'+esc(r.item)+'</td><td class="num">'+yen(r.amount)+'</td><td>'+esc(r.tax)+'</td><td>'+esc(r.note)+'</td><td>'+esc(r.editor)+'</td><td>'+esc(r.at)+'</td><td>'+esc(r.edited||'')+'</td></tr>';
+        var delBtn = r.row
+          ? (locked
+              ? '<button class="btn sm" disabled title="振込済みのためロック中">🗑 削除</button>'
+              : '<button class="btn sm danger" onclick="deleteRow('+i+')">🗑 削除</button>')
+          : '';
+        return '<tr><td>'+editBtn+' '+delBtn+'</td><td><span class="kubun-tag">'+esc(r.kubun)+'</span></td><td>'+esc(r.item)+'</td><td class="num">'+yen(r.amount)+'</td><td>'+esc(r.tax)+'</td><td>'+esc(r.note)+'</td><td>'+esc(r.editor)+'</td><td>'+esc(r.at)+'</td><td>'+esc(r.edited||'')+'</td></tr>';
       }).join('');
   }
   var dt=st.detail;
@@ -977,6 +984,23 @@ function saveEditRow(rowIdx){
       });
     })
     .catch(function(e){ loading(false); toast('修正エラー: '+(e.message||e)); });
+}
+
+/* ---- 入力済み明細の削除（本部/マスター。振込済みロック中はマスターのみ） ---- */
+function deleteRow(rowIdx){
+  var st=currentStore(); if(!st) return;
+  if(isLockedFor(st)){ toast('🔒 振込済みのためロック中です（マスターアカウントが必要です）'); return; }
+  var r=st.detail.rows[rowIdx]; if(!r||!r.row){ toast('この行は削除できません'); return; }
+  var ok=confirm('【削除の確認】この明細を削除します。元に戻せません。\n\n'
+    +'店舗：'+st.name+'\n対象月：'+mLabel(state.month)+'分\n区分：'+r.kubun+'\n費目名：'+r.item+'\n金額：'+yen(r.amount)
+    +(r.note?'\n備考：'+r.note:'')
+    +'\n\n本当に削除してよろしいですか？');
+  if(!ok) return;
+  loading(true,'削除中…');
+  var month=state.month;
+  apiAuth('sd_deleteRow',{store:st.name,row:r.row,orig:{item:r.item,amount:r.amount}})
+    .then(function(res){ loading(false); toast('🗑 削除しました：'+res.item+'（'+yen(res.amount)+'）'); loadDashboard(month,true); })
+    .catch(function(e){ loading(false); toast('削除エラー: '+(e.message||e)); });
 }
 
 function prefillItem(name){
@@ -1114,14 +1138,14 @@ function openCashModal(){
     var rows=res.items.map(function(it){
       var stateHtml, check='';
       if(it.amount==null){ stateHtml='<span class="muted">売上シートにデータなし</span>'; }
-      else if(it.already.length){ stateHtml='<span class="mchip cat">既に入力あり: '+esc(it.already.join(' / '))+'</span>'; }
+      else if(it.already.length){ stateHtml='<span class="mchip cat">既に入力あり（チェックすると上書き更新）: '+esc(it.already.join(' / '))+'</span>'; }
       else { stateHtml='<span class="ok-note">取込可</span>'; check='checked'; }
       var box=it.amount!=null?'<input type="checkbox" class="cash-check" data-store="'+esc(it.store)+'" '+check+'>':'';
       return '<tr><td>'+box+'</td><td>'+esc(it.store)+'<br><span class="muted">'+esc(it.salesName)+'</span></td>'
         +'<td class="num">'+(it.amount!=null?yen(it.amount):'－')+'</td><td>'+(it.days||'－')+'日</td><td>'+stateHtml+'</td></tr>';
     }).join('');
     openModal('💴 現金売上の取込　'+res.monthLabel+'分',
-      '<p class="muted" style="margin-bottom:8px">【サーバー】ダッシュボード「分析_日別店舗」T列（現金）の月合計です。チェックした店舗に「◯月現金売上」として登録します。</p>'
+      '<p class="muted" style="margin-bottom:8px">【サーバー】ダッシュボード「分析_日別店舗」T列（現金）の月合計です。チェックした店舗に「◯月現金売上」として登録します。既に入力済みの店舗は、新規追加ではなく既存の行を上書き更新します（重複しません）。</p>'
       +'<div class="matrix-scroll"><table class="entry"><tr><th></th><th>店舗</th><th style="text-align:right">現金売上合計</th><th>日数</th><th>状態</th></tr>'+rows+'</table></div>',
       '<button class="btn primary" onclick="applyCash()">チェックした店舗に登録する</button><button class="btn" onclick="closeModal()">閉じる</button>');
   }).catch(function(e){ loading(false); toast('集計エラー: '+(e.message||e)); });

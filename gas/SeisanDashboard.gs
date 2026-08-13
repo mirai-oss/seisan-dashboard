@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.5-sso';
+var SD_VERSION = 'v5.6-sso';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -41,7 +41,7 @@ var SD_KUBUN_OPTIONS = ['売上', '変動費', '固定ロイヤリティ', '変�
  * 呼べる関数はここに明示的に列挙したものだけ（それ以外は拒否）。
  * sd_login 以外は全て第1引数がtoken（内部の sd_auth_ が権限検証する）。 */
 var SD_API_WHITELIST = [
-  'sd_login', 'sd_supaLogin', 'sd_getDashboard', 'sd_addRows', 'sd_updateRow', 'sd_setPaid',
+  'sd_login', 'sd_supaLogin', 'sd_getDashboard', 'sd_addRows', 'sd_updateRow', 'sd_deleteRow', 'sd_setPaid',
   'sd_pdfPreview', 'sd_issueAndSend', 'sd_cashPreview', 'sd_cashApply',
   'sd_prepareMonth', 'sd_setupAutoPrep', 'sd_uploadAttachment', 'sd_listAttachments',
   'sd_getPdfB64', 'sd_updateCheckSheet', 'sd_bulkAdd', 'sd_getSettings',
@@ -51,7 +51,7 @@ var SD_API_WHITELIST = [
 function sd_apiFnMap_() {
   return {
     sd_login: sd_login, sd_supaLogin: sd_supaLogin, sd_getDashboard: sd_getDashboard, sd_addRows: sd_addRows,
-    sd_updateRow: sd_updateRow, sd_setPaid: sd_setPaid, sd_pdfPreview: sd_pdfPreview,
+    sd_updateRow: sd_updateRow, sd_deleteRow: sd_deleteRow, sd_setPaid: sd_setPaid, sd_pdfPreview: sd_pdfPreview,
     sd_issueAndSend: sd_issueAndSend, sd_cashPreview: sd_cashPreview, sd_cashApply: sd_cashApply,
     sd_prepareMonth: sd_prepareMonth, sd_setupAutoPrep: sd_setupAutoPrep,
     sd_uploadAttachment: sd_uploadAttachment, sd_listAttachments: sd_listAttachments,
@@ -1097,6 +1097,51 @@ function sd_updateRow(token, payload) {
   }
 }
 
+/* ---------- API: 明細削除（本部/マスター。振込済みロック中はマスターのみ） ----------
+ * 誤削除防止のため、削除前に元の費目名・金額が一致するかをサーバー側でも検証する。 */
+function sd_deleteRow(token, payload) {
+  // payload = { store, row, orig:{item, amount} }
+  var user = sd_auth_(token, true);
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(20000);
+  try {
+    var det = sd_detect_();
+    var cfg = sd_config_(sd_masterStores_(det), det);
+    var st = null;
+    cfg.forEach(function (s) { if (s.name === payload.store) st = s; });
+    if (!st || !st.db) throw new Error('店舗のDBシートが見つかりません: ' + payload.store);
+    var sh = SpreadsheetApp.getActive().getSheetByName(st.db.sheet);
+    var cm = st.db.colMap;
+    var row = Number(payload.row);
+    if (!row || row <= st.db.headerRow) throw new Error('行番号が不正です');
+
+    // 元データの一致確認（他の人が同時に編集した場合の誤削除防止）
+    var curItem = String(sh.getRange(row, cm.item).getDisplayValue()).trim();
+    var curAmtRaw = sh.getRange(row, cm.amount).getValue();
+    var curAmt = (typeof curAmtRaw === 'number') ? curAmtRaw
+      : Number(String(curAmtRaw).replace(/[¥￥,，\s]/g, '')) || 0;
+    if (sd_norm_(curItem) !== sd_norm_(payload.orig.item) || Math.round(curAmt) !== Math.round(Number(payload.orig.amount))) {
+      throw new Error('この行は別の場所で変更されています。再読込してからもう一度削除してください（現在: ' + curItem + ' ¥' + curAmt.toLocaleString() + '）');
+    }
+    // 対象行の年月を読み、その月が振込済みならマスター以外は削除不可
+    var rowYm = '';
+    var ymRaw = sh.getRange(row, cm.ym).getValue();
+    if (ymRaw instanceof Date) rowYm = sd_fmtMonth_(ymRaw);
+    else {
+      var mm = String(sh.getRange(row, cm.ym).getDisplayValue()).match(/(\d{4})[\/\-年.](\d{1,2})/);
+      if (mm) rowYm = mm[1] + '-' + ('0' + mm[2]).slice(-2);
+    }
+    if (rowYm) sd_requireUnlocked_(user, payload.store, rowYm);
+
+    sh.deleteRow(row);
+    sd_clearRowsCache_(st.db.sheet);
+    sd_log_('明細削除', payload.store, rowYm, curItem + '（¥' + curAmt.toLocaleString() + '）', '', '', user.name, '');
+    return { ok: true, item: curItem, amount: curAmt };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 /* DBシートへの行追加（共通） */
 function sd_appendRows_(db, ymDate, rows, editor) {
   var sh = SpreadsheetApp.getActive().getSheetByName(db.sheet);
@@ -1190,15 +1235,23 @@ function sd_cashApplyCore_(monthKey, storeNames, editorName, skipIfExists) {
     cfg.forEach(function (st) {
       if (storeNames && storeNames.indexOf(st.name) < 0) return;
       if (!st.db) { results.push(st.name + ': DBシート未検出'); return; }
+      var existingCashRows = sd_readRows_(st.db).filter(function (r) {
+        return r.ym === monthKey && sd_norm_(r.kubun) === '売上' && sd_norm_(r.item).indexOf('現金売上') > -1;
+      });
       if (skipIfExists) {
-        var exists = sd_readRows_(st.db).some(function (r) {
-          return r.ym === monthKey && sd_norm_(r.kubun) === '売上' && sd_norm_(r.item).indexOf('現金売上') > -1;
-        });
-        if (exists) { results.push(st.name + ': 既に現金売上あり（スキップ）'); return; }
+        if (existingCashRows.length) { results.push(st.name + ': 既に現金売上あり（スキップ）'); return; }
       }
       var amt = sums[sd_norm_(st.salesName)];
       if (amt == null) { results.push(st.name + ': 売上シートにデータなし'); return; }
       var item = (d.getMonth() + 1) + '月現金売上';
+      if (existingCashRows.length) {
+        // 既に現金売上の行があれば、新規追加せず上書き更新する（重複防止）
+        sd_updateCashRow_(st.db, existingCashRows[0].row, item, amt, editorName);
+        sd_clearRowsCache_(st.db.sheet);
+        var dupNote = existingCashRows.length > 1 ? '　※他に' + (existingCashRows.length - 1) + '件の重複行あり・要確認' : '';
+        results.push(st.name + ': ¥' + amt.toLocaleString() + ' に更新' + dupNote);
+        return;
+      }
       sd_appendRows_(st.db, d, [{
         kubun: '売上', item: item, amount: amt, tax: '10%',
         note: '分析_日別店舗より自動取込'
@@ -1210,6 +1263,24 @@ function sd_cashApplyCore_(monthKey, storeNames, editorName, skipIfExists) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/* 既存の現金売上行を上書き更新（現金取込の再実行で重複行が増えないようにするため） */
+function sd_updateCashRow_(db, row, item, amt, editorName) {
+  var sh = SpreadsheetApp.getActive().getSheetByName(db.sheet);
+  var cm = db.colMap;
+  if (!cm.edited) {
+    var width = 0;
+    Object.keys(cm).forEach(function (k) { if (cm[k] > width) width = cm[k]; });
+    sh.getRange(db.headerRow, width + 1).setValue('修正日');
+    cm.edited = width + 1;
+  }
+  sh.getRange(row, cm.item).setValue(item);
+  sh.getRange(row, cm.amount).setValue(amt);
+  if (cm.note) sh.getRange(row, cm.note).setValue('分析_日別店舗より自動取込（更新）');
+  if (cm.editor) sh.getRange(row, cm.editor).setValue(String(editorName || ''));
+  if (cm.at) sh.getRange(row, cm.at).setValue(Utilities.formatDate(new Date(), SD_TZ, 'M/d'));
+  sh.getRange(row, cm.edited).setValue(Utilities.formatDate(new Date(), SD_TZ, 'M/d') + ' ' + (editorName || ''));
 }
 
 function sd_cashSums_(ext, monthKey, cfg) {
