@@ -140,6 +140,9 @@
   .rowdel{border:none;background:none;color:var(--ink3);font-size:16px;cursor:pointer}
   .entry-actions{display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap}
   .muted{color:var(--ink3);font-size:12px}
+  #perf-card{padding:10px 16px}
+  .perf-row{padding:2px 0;color:var(--ink2)}
+  .perf-row.warn{color:var(--bad);font-weight:700}
   .existing h3{font-size:13px;color:var(--ink2);margin:14px 0 6px}
   .kubun-tag{font-size:11px;padding:1px 7px;border-radius:4px;background:#eef0f4;color:var(--ink2);white-space:nowrap}
 
@@ -236,6 +239,14 @@
     <a class="plain" id="sheet-link" href="#" target="_blank" rel="noopener" style="display:none">スプレッドシートを開く ↗</a>
     <div class="sub" id="updated-at"></div>
   </header>
+
+  <div class="card" id="perf-card">
+    <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="var b=document.getElementById('perf-panel');b.style.display=b.style.display==='none'?'':'none';">
+      <b style="font-size:13px">⏱ 処理速度ログ</b>
+      <span class="muted" style="font-size:11px">（登録・修正・削除・添付のたびに、サーバー時間と再読込を含めた合計をここに記録します。クリックで開閉）</span>
+    </div>
+    <div id="perf-panel" style="margin-top:8px;font-size:12px;font-family:monospace;line-height:1.8"></div>
+  </div>
 
   <div class="tabs" id="tabs">
     <button id="tab-check" class="on" onclick="showView('check')">✅ 店舗チェック</button>
@@ -429,15 +440,52 @@ function apiAuth(fn){
 function toast(msg,ms){ var t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._tm); t._tm=setTimeout(function(){t.classList.remove('show')},ms||3800); }
 function loading(on,msg){ document.getElementById('loading').classList.toggle('show',!!on); document.getElementById('loading-msg').textContent=msg||'読み込み中…'; }
 function yen(n){ return '¥'+Number(n||0).toLocaleString('ja-JP'); }
+
+/* ===== 速度計測パネル（開発者ツール不要・画面に常時表示） =====
+ * 「編集は7.5秒と出るのに実際は10〜15秒かかる」の正体は、編集の直後に
+ * 走る画面の再読み込み（loadDashboard）の時間が別枠だったため。
+ * ここでは1回の操作（編集→再読み込み）をまとめて記録し、合計時間も出す。 */
+var perfHistory = [];
+var perfOp = null; // 進行中の操作（例: 修正→再読込）をまとめるためのバッファ
+function perfOpStart(label){ perfOp = {label:label, t0:performance.now(), steps:[]}; }
+function perfStep(label, serverMs, roundTripMs){
+  var entry = {label:label, server:serverMs, rt:roundTripMs};
+  if(perfOp) perfOp.steps.push(entry);
+  console.log('⏱ ['+label+'] サーバー:'+(serverMs!=null?serverMs+'ms':'?')+' ／往復:'+roundTripMs+'ms');
+  renderPerfEntry(entry, perfOp && perfOp.steps.length>1 ? null : (perfOp?perfOp.label:label));
+  return entry;
+}
+function perfOpEnd(){
+  if(!perfOp) return;
+  var total=Math.round(performance.now()-perfOp.t0);
+  var line = perfOp.steps.map(function(s){
+    return s.label+' サーバー'+(s.server!=null?(s.server/1000).toFixed(1)+'s':'?')+'/往復'+(s.rt/1000).toFixed(1)+'s';
+  }).join(' → ');
+  perfHistory.unshift({time:new Date().toLocaleTimeString('ja-JP'), label:perfOp.label, line:line, total:total});
+  perfHistory = perfHistory.slice(0,8);
+  renderPerfPanel();
+  perfOp = null;
+}
+function renderPerfEntry(){ /* 個別ステップ時点では合計行のみ更新すれば十分なので何もしない（perfOpEndでまとめて描画） */ }
+function renderPerfPanel(){
+  var el = document.getElementById('perf-panel');
+  if(!el) return;
+  if(!perfHistory.length){ el.innerHTML='<span class="muted">まだ計測データがありません（明細の登録・修正・削除・添付を行うとここに表示されます）</span>'; return; }
+  el.innerHTML = perfHistory.map(function(h){
+    var warn = h.total>=6000;
+    return '<div class="perf-row'+(warn?' warn':'')+'">'+h.time+'　<b>'+esc(h.label)+'</b>　'+esc(h.line)+'　＝<b>合計'+(h.total/1000).toFixed(1)+'秒</b></div>';
+  }).join('');
+}
 /* 速度計測: サーバー内訳(_ms)と往復時間を計測してconsoleに出し、短い要約文字列を返す。
- * 「アップロード/編集が遅い」原因の切り分け用（GAS内部が遅いのか、通信往復が遅いのか）。 */
+ * 「アップロード/編集が遅い」原因の切り分け用（GAS内部が遅いのか、通信往復が遅いのか）。
+ * perfOpStart()で始めた一連の操作の1ステップとして記録される。 */
 function timedApiAuth(label, fn){
   var args=Array.prototype.slice.call(arguments,2);
   var t0=performance.now();
   return apiAuth.apply(null,[fn].concat(args)).then(function(res){
     var roundTrip=Math.round(performance.now()-t0);
     var serverTotal=res && res._ms ? res._ms.total : null;
-    console.log('⏱ ['+label+'] 往復:'+roundTrip+'ms／サーバー内訳:', res&&res._ms);
+    perfStep(label, serverTotal, roundTrip);
     var summary = serverTotal!=null
       ? '（サーバー'+(serverTotal/1000).toFixed(1)+'秒／往復'+(roundTrip/1000).toFixed(1)+'秒）'
       : '（往復'+(roundTrip/1000).toFixed(1)+'秒）';
@@ -591,13 +639,19 @@ function loadDashboard(monthKey, force){
     refreshInBackground(monthKey, key);
     return;
   }
+  // 直前に修正/削除/登録などが計測中でなければ、この読み込み単体を1操作として計測する
+  if(!perfOp) perfOpStart(force?'再読込':'画面読込');
   loading(true);
+  var t0=performance.now();
   apiAuth('sd_getDashboard', monthKey||null).then(function(data){
+    var rt=Math.round(performance.now()-t0);
+    perfStep('再読込', data._ms?data._ms.total:null, rt);
+    perfOpEnd(); // ここで一連の操作（修正→再読込 等）の合計が確定する
     dashCache[key]=data; dashCache[data.month]=data;
     state.data=data; state.month=data.month;
     render();
     loading(false);
-  }).catch(function(e){ loading(false); toast('読み込みエラー: '+(e.message||e)); });
+  }).catch(function(e){ loading(false); perfOpEnd(); toast('読み込みエラー: '+(e.message||e)); });
 }
 function refreshInBackground(monthKey, key){
   apiAuth('sd_getDashboard', monthKey||null).then(function(data){
@@ -1011,7 +1065,7 @@ function saveEditRow(rowIdx){
   if(!item){ toast('費目名を入れてください'); return; }
   if(amount===''||isNaN(Number(amount))){ toast('金額が数値ではありません'); return; }
   if(!confirm('【確認】この明細を修正します。\n\n'+r.item+'（'+yen(r.amount)+'）\n　↓\n'+item+'（'+yen(Number(amount))+'）'+(file?'\n\n📎 資料「'+file.name+'」も保存します。':'')+'\n\nよろしいですか？')) return;
-  closeModal(); loading(true,'修正中…');
+  closeModal(); loading(true,'修正中…'); perfOpStart('修正');
   var storeName=st.name, month=state.month;
   timedApiAuth('修正','sd_updateRow',{store:storeName,row:r.row,orig:{item:r.item,amount:r.amount},
     kubun:document.getElementById('ed-kubun').value,item:item,amount:Number(amount),
@@ -1024,7 +1078,7 @@ function saveEditRow(rowIdx){
           .then(function(t2){ loading(false); toast('✏️ 修正しました（資料「'+t2.res.name+'」も保存）'+t2.summary); loadDashboard(month,true); });
       });
     })
-    .catch(function(e){ loading(false); toast('修正エラー: '+(e.message||e)); });
+    .catch(function(e){ loading(false); perfOpEnd(); toast('修正エラー: '+(e.message||e)); });
 }
 
 /* ---- 入力済み明細の削除（本部/マスター。振込済みロック中はマスターのみ） ---- */
@@ -1037,11 +1091,11 @@ function deleteRow(rowIdx){
     +(r.note?'\n備考：'+r.note:'')
     +'\n\n本当に削除してよろしいですか？');
   if(!ok) return;
-  loading(true,'削除中…');
+  loading(true,'削除中…'); perfOpStart('削除');
   var month=state.month;
   timedApiAuth('削除','sd_deleteRow',{store:st.name,row:r.row,orig:{item:r.item,amount:r.amount}})
     .then(function(t){ loading(false); toast('🗑 削除しました：'+t.res.item+'（'+yen(t.res.amount)+'）'+t.summary); loadDashboard(month,true); })
-    .catch(function(e){ loading(false); toast('削除エラー: '+(e.message||e)); });
+    .catch(function(e){ loading(false); perfOpEnd(); toast('削除エラー: '+(e.message||e)); });
 }
 
 function prefillItem(name){
@@ -1104,16 +1158,16 @@ function submitRows(force){
   if(!force && !confirm('【確認】\n'+mLabel(month)+'分 ／ '+store+'\n明細 '+rows.length+'件（合計 '+yen(total)+'）を登録します。'+fileNote+'\nよろしいですか？')) return;
   var rowsForApi=rows.map(function(r){return {kubun:r.kubun,item:r.item,amount:r.amount,tax:r.tax,note:r.note};});
   var btn=document.getElementById('submit-btn');
-  btn.disabled=true; loading(true,'登録中…');
+  btn.disabled=true; loading(true,'登録中…'); perfOpStart('登録');
   var t0=performance.now();
-  apiAuth('sd_addRows',{store:store,month:month,editor:editor,rows:rowsForApi,force:!!force})
-    .then(function(res){
+  timedApiAuth('登録','sd_addRows',{store:store,month:month,editor:editor,rows:rowsForApi,force:!!force})
+    .then(function(t){
+      var res=t.res;
       if(res&&res.dup){
         btn.disabled=false; loading(false);
         if(confirm('⚠ 同じ月に同じ費目・金額が既にあります:\n・'+res.dup.join('\n・')+'\n\n重複してもこのまま登録しますか？')) submitRows(true);
         return;
       }
-      console.log('⏱ [明細登録] サーバー内訳:', res._ms);
       if(!files.length){ finishSubmit(res, month, 0, t0); return; }
       // 添付ファイルを順にアップロード
       loading(true,'資料をアップロード中…（'+files.length+'件）');
@@ -1122,15 +1176,15 @@ function submitRows(force){
       files.forEach(function(r){
         chain=chain.then(function(){
           return readFileB64(r.file).then(function(b64){
-            return apiAuth('sd_uploadAttachment',{store:store,month:month,kind:r.item,fileName:r.file.name,mimeType:r.file.type,b64:b64})
-              .then(function(u){ uploaded++; console.log('⏱ [添付'+uploaded+'] サーバー内訳:', u._ms); });
+            return timedApiAuth('添付'+(uploaded+1),'sd_uploadAttachment',{store:store,month:month,kind:r.item,fileName:r.file.name,mimeType:r.file.type,b64:b64})
+              .then(function(){ uploaded++; });
           });
         });
       });
       chain.then(function(){ finishSubmit(res, month, uploaded, t0); })
         .catch(function(e){ btn.disabled=false; loading(false); toast('明細は登録されましたが資料アップロードでエラー: '+(e.message||e)); loadDashboard(month,true); });
     })
-    .catch(function(e){ btn.disabled=false; loading(false); toast('登録エラー: '+(e.message||e)); });
+    .catch(function(e){ btn.disabled=false; loading(false); perfOpEnd(); toast('登録エラー: '+(e.message||e)); });
 }
 function finishSubmit(res, month, uploaded, t0){
   document.getElementById('submit-btn').disabled=false;
@@ -1257,14 +1311,14 @@ function uploadAttach(){
   var reader=new FileReader();
   reader.onload=function(){
     var b64=String(reader.result).split(',')[1];
-    loading(true,'アップロード中…');
+    loading(true,'アップロード中…'); perfOpStart('添付アップロード');
     timedApiAuth('添付アップロード','sd_uploadAttachment',{store:attachCtx.store,month:state.month,kind:kind,fileName:f.name,mimeType:f.type,b64:b64})
       .then(function(t){
-        loading(false);
+        loading(false); perfOpEnd();
         toast('✅ '+t.res.name+' を保存しました（'+t.res.folder+'）'+t.summary);
         apiAuth('sd_listAttachments', attachCtx.store, state.month).then(function(files){ renderAttachModal(attachCtx.store, files); });
       })
-      .catch(function(e){ loading(false); toast('アップロードエラー: '+(e.message||e)); });
+      .catch(function(e){ loading(false); perfOpEnd(); toast('アップロードエラー: '+(e.message||e)); });
   };
   reader.readAsDataURL(f);
 }
@@ -1502,6 +1556,7 @@ function saveCorp(client){
   }).catch(function(e){ loading(false); toast('保存エラー: '+(e.message||e)); });
 }
 
+renderPerfPanel();
 /* ===== 起動 ===== */
 if(state.token){
   document.getElementById('login-view').style.display='none';

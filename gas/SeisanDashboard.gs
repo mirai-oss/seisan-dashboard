@@ -880,13 +880,17 @@ function sd_missing_(byMonth, monthKey, required) {
 /* ---------- API: ダッシュボード ---------- */
 
 function sd_getDashboard(token, monthKey) {
+  var timer = sd_timer_();
   var user = sd_auth_(token, false);
+  timer.mark('auth');
   var ss = SpreadsheetApp.getActive();
   var det = sd_detect_();
   var master = sd_masterStores_(det);
   var cfg = sd_allowedStores_(user, sd_config_(master, det));
+  timer.mark('detectSheets');
   var issued = sd_issuedMap_(det);
   var sentLog = sd_sentMap_();
+  timer.mark('issuedSent');
 
   if (!monthKey) {
     var now = new Date();
@@ -901,6 +905,7 @@ function sd_getDashboard(token, monthKey) {
   var corps = sd_corpMap_(cfg);
   var ext = sd_extConfig_();
   var payMap = sd_paySumsCached_(ext, monthKey, cfg); // 売上シートS列の対象月合計（未設定ならnull）
+  timer.mark('paidCorpsPayMap');
 
   var stores = cfg.map(function (st) {
     var rows = st.db ? sd_readRowsCached_(st.db) : [];
@@ -976,6 +981,7 @@ function sd_getDashboard(token, monthKey) {
     };
   });
 
+  timer.mark('storesLoop（' + stores.length + '店舗）');
   return {
     ver: SD_VERSION,
     user: { name: user.name, role: user.role },
@@ -987,7 +993,8 @@ function sd_getDashboard(token, monthKey) {
     kubunOptions: Object.keys(kubunSet),
     taxOptions: SD_TAX_OPTIONS,
     sheetUrl: user.role === '本部' ? ss.getUrl() : '',
-    updatedAt: Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd HH:mm')
+    updatedAt: Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd HH:mm'),
+    _ms: timer.breakdown()
   };
 }
 
