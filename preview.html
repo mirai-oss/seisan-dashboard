@@ -130,8 +130,11 @@
 
   table.entry{width:100%;border-collapse:collapse}
   table.entry th,table.entry td{border-bottom:1px solid var(--line);padding:6px 6px;font-size:13px;text-align:left;vertical-align:middle}
-  table.entry th{color:var(--ink2);font-weight:600;font-size:12px}
+  table.entry th{color:var(--ink2);font-weight:600;font-size:12px;text-align:center;white-space:nowrap}
+  table.entry th.l,table.entry td.l{text-align:left}
+  table.entry th.c,table.entry td.c{text-align:center}
   table.entry input,table.entry select{width:100%;height:34px;border:1px solid var(--line);border-radius:6px;padding:0 8px;font-size:13px;background:#fff}
+  table.entry select.f-kubun,table.entry select.f-tax{text-align:center;text-align-last:center}
   table.entry input.amount{text-align:right;font-variant-numeric:tabular-nums}
   table.entry td.num{text-align:right;font-variant-numeric:tabular-nums}
   .rowdel{border:none;background:none;color:var(--ink3);font-size:16px;cursor:pointer}
@@ -341,7 +344,7 @@
       <div id="entry-card">
         <table class="entry">
           <thead>
-            <tr><th style="width:120px">区分</th><th>費目名</th><th style="width:120px">金額（税込）</th><th style="width:90px">税率</th><th>備考</th><th style="width:150px">📎 資料（任意）</th><th style="width:30px"></th></tr>
+            <tr><th style="width:120px">区分</th><th class="l">費目名</th><th style="width:120px;text-align:right">金額（税込）</th><th style="width:90px">税率</th><th class="l">備考</th><th style="width:150px">📎 資料（任意）</th><th style="width:30px"></th></tr>
           </thead>
           <tbody id="entry-rows"></tbody>
         </table>
@@ -436,7 +439,7 @@ sd_login:function(id,pw){ROLE=(id.indexOf('master')>-1)?'マスター':((id.inde
       sd_setupAutoPrep:function(t){return ({ok:true,message:'毎月1日9時 定期費目セット＋毎月18日9時 振込期限リマインド を設定しました'});},
       sd_pdfPreview:function(t,s,mk){return ({fileName:'精算書_2026.06_'+s+'.pdf',b64:PDFB64});},
       sd_issueAndSend:function(t,s,mk){var re=(s==='秋葉原 肉寿司');return ({ok:true,fileName:'精算書_2026.06_'+s+(re?'_再送信':'')+'.pdf',mailed:true,to:'sample@example.com',resend:re});},
-      sd_listAttachments:function(t,s,mk){return ([]);}
+      sd_listAttachments:function(t,s,mk){return ([{name:'ガーデン請求書_2026.06_'+s+'.pdf',url:'#',id:'a1',date:'7/15 10:21'},{name:'GOSSO仕入（10％）_2026.06_'+s+'.pdf',url:'#',id:'a2',date:'7/16 09:00'}]);}
   };
   var __origFetch = window.fetch.bind(window);
   window.fetch = function(url, opts){
@@ -994,6 +997,20 @@ function currentStore(){
   for (var i=0;i<state.data.stores.length;i++) if(state.data.stores[i].name===name) return state.data.stores[i];
   return null;
 }
+/* 明細の費目名と添付ファイル名（種類_年.月_店舗名）を突き合わせ、行ごとに開くリンクを出す */
+function matchAttachFiles(item, monthKey, store, files){
+  var wanted = item + '_' + monthKey.replace('-','.') + '_' + store;
+  return (files||[]).filter(function(f){
+    var name = String(f.name||'').replace(/^【再\d*】/,'');
+    return name.indexOf(wanted) === 0;
+  });
+}
+function attachCellHtml(files){
+  if(!files || !files.length) return '<span class="muted" style="font-size:11px">－</span>';
+  return files.map(function(f){
+    return '<a class="plain" href="'+esc(f.url)+'" target="_blank" rel="noopener" title="'+esc(f.name)+'">📎'+(files.length>1?'':'')+'</a>';
+  }).join(' ');
+}
 function renderExisting(){
   var st=currentStore(); if(!st) return;
   var mk=document.getElementById('in-month').value;
@@ -1007,23 +1024,32 @@ function renderExisting(){
   }
   var rows=st.detail.rows;
   title.textContent=mLabel(mk)+' の入力済み明細（'+rows.length+'件）';
+  function buildRows(files){
+    return rows.map(function(r,i){
+      var locked = isLockedFor(st);
+      var editBtn = r.row
+        ? (locked
+            ? '<button class="btn sm" disabled title="振込済みのためロック中">✏️ 修正</button>'
+            : '<button class="btn sm" onclick="openEditRow('+i+')">✏️ 修正</button>')
+        : '';
+      var delBtn = r.row
+        ? (locked
+            ? '<button class="btn sm" disabled title="振込済みのためロック中">🗑 削除</button>'
+            : '<button class="btn sm danger" onclick="deleteRow('+i+')">🗑 削除</button>')
+        : '';
+      var attach = attachCellHtml(matchAttachFiles(r.item, mk, st.name, files));
+      return '<tr><td>'+editBtn+' '+delBtn+'</td><td class="c"><span class="kubun-tag">'+esc(r.kubun)+'</span></td><td>'+esc(r.item)+'</td><td class="num">'+yen(r.amount)+'</td><td class="c">'+esc(r.tax)+'</td><td>'+esc(r.note)+'</td><td class="c">'+attach+'</td><td>'+esc(r.editor)+'</td><td>'+esc(r.at)+'</td><td>'+esc(r.edited||'')+'</td></tr>';
+    }).join('');
+  }
+  var head='<tr><th style="width:130px"></th><th class="c">区分</th><th class="l">費目名</th><th style="text-align:right">金額</th><th class="c">税率</th><th class="l">備考</th><th class="c">📎資料</th><th>入力者</th><th>入力日</th><th>修正日</th></tr>';
   if(!rows.length){ tbl.innerHTML='<tr><td class="muted">まだ入力がありません</td></tr>'; }
   else{
-    tbl.innerHTML='<tr><th style="width:130px"></th><th>区分</th><th>費目名</th><th style="text-align:right">金額</th><th>税率</th><th>備考</th><th>入力者</th><th>入力日</th><th>修正日</th></tr>'
-      + rows.map(function(r,i){
-        var locked = isLockedFor(st);
-        var editBtn = r.row
-          ? (locked
-              ? '<button class="btn sm" disabled title="振込済みのためロック中">✏️ 修正</button>'
-              : '<button class="btn sm" onclick="openEditRow('+i+')">✏️ 修正</button>')
-          : '';
-        var delBtn = r.row
-          ? (locked
-              ? '<button class="btn sm" disabled title="振込済みのためロック中">🗑 削除</button>'
-              : '<button class="btn sm danger" onclick="deleteRow('+i+')">🗑 削除</button>')
-          : '';
-        return '<tr><td>'+editBtn+' '+delBtn+'</td><td><span class="kubun-tag">'+esc(r.kubun)+'</span></td><td>'+esc(r.item)+'</td><td class="num">'+yen(r.amount)+'</td><td>'+esc(r.tax)+'</td><td>'+esc(r.note)+'</td><td>'+esc(r.editor)+'</td><td>'+esc(r.at)+'</td><td>'+esc(r.edited||'')+'</td></tr>';
-      }).join('');
+    tbl.innerHTML=head+buildRows(null); // 先に添付なしで即表示 → 取得できたら差し替え
+    apiAuth('sd_listAttachments', st.name, mk).then(function(files){
+      if(currentStore()===st && document.getElementById('in-month').value===mk){
+        tbl.innerHTML=head+buildRows(files);
+      }
+    }).catch(function(){ /* 添付一覧の取得失敗は明細表示自体には影響させない */ });
   }
   var dt=st.detail;
   if (dt.missing.length||dt.catWarn.length){
