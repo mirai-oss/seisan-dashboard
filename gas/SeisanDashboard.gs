@@ -993,14 +993,31 @@ function sd_getDashboard(token, monthKey) {
 
 /* ---------- API: 明細追加（本部のみ） ---------- */
 
+/* 簡易タイマー: どの処理に時間がかかっているか計測してレスポンスに含める（速度計測用）。
+ * 本番運用の妨げにならないよう、計算コストはほぼゼロ（Date.now()呼び出しのみ）。 */
+function sd_timer_() {
+  var t0 = Date.now(), last = t0, marks = [];
+  return {
+    mark: function (label) { var now = Date.now(); marks.push([label, now - last]); last = now; },
+    breakdown: function () {
+      var obj = {}; marks.forEach(function (m) { obj[m[0]] = m[1]; });
+      obj.total = Date.now() - t0; return obj;
+    }
+  };
+}
+
 function sd_addRows(token, payload) {
+  var timer = sd_timer_();
   var user = sd_auth_(token, true);
+  timer.mark('auth');
   var lock = LockService.getDocumentLock();
   lock.waitLock(20000);
+  timer.mark('lockWait');
   try {
     var det = sd_detect_();
     var master = sd_masterStores_(det);
     var cfg = sd_config_(master, det);
+    timer.mark('detectSheets');
     var st = null;
     cfg.forEach(function (s) { if (s.name === payload.store) st = s; });
     if (!st) throw new Error('店舗が見つかりません: ' + payload.store);
@@ -1018,6 +1035,7 @@ function sd_addRows(token, payload) {
 
     if (!payload.force) {
       var existing = sd_readRows_(st.db).filter(function (r) { return r.ym === payload.month; });
+      timer.mark('dupCheckRead');
       var dups = [];
       rows.forEach(function (r) {
         var hit = existing.some(function (e) {
@@ -1025,12 +1043,14 @@ function sd_addRows(token, payload) {
         });
         if (hit) dups.push(r.item + '（¥' + Number(r.amount).toLocaleString() + '）');
       });
-      if (dups.length) return { ok: false, dup: dups };
+      if (dups.length) return { ok: false, dup: dups, _ms: timer.breakdown() };
     }
 
     var added = sd_appendRows_(st.db, ymDate, rows, payload.editor || user.name);
+    timer.mark('write');
     sd_clearRowsCache_(st.db.sheet);
-    return { ok: true, added: added, sheet: st.db.sheet, month: payload.month };
+    timer.mark('cacheClear');
+    return { ok: true, added: added, sheet: st.db.sheet, month: payload.month, _ms: timer.breakdown() };
   } finally {
     lock.releaseLock();
   }
@@ -1041,9 +1061,12 @@ function sd_addRows(token, payload) {
  * 修正日はDBの「修正日」列（無ければ自動作成）に記録される。 */
 function sd_updateRow(token, payload) {
   // payload = { store, row, orig:{item, amount}, kubun, item, amount, tax, note }
+  var timer = sd_timer_();
   var user = sd_auth_(token, true);
+  timer.mark('auth');
   var lock = LockService.getDocumentLock();
   lock.waitLock(20000);
+  timer.mark('lockWait');
   try {
     var det = sd_detect_();
     var cfg = sd_config_(sd_masterStores_(det), det);
@@ -1054,10 +1077,27 @@ function sd_updateRow(token, payload) {
     var cm = st.db.colMap;
     var row = Number(payload.row);
     if (!row || row <= st.db.headerRow) throw new Error('行番号が不正です');
+    timer.mark('detectSheets');
+
+    // 修正日列が無ければヘッダー行に自動作成（列幅が変わるので、行の一括読み込みより先に確定させる）
+    if (!cm.edited) {
+      var width0 = 0;
+      Object.keys(cm).forEach(function (k) { if (cm[k] > width0) width0 = cm[k]; });
+      sh.getRange(st.db.headerRow, width0 + 1).setValue('修正日');
+      cm.edited = width0 + 1;
+    }
+    var width = 0;
+    Object.keys(cm).forEach(function (k) { if (cm[k] > width) width = cm[k]; });
+
+    // 行全体を1回で読み込む（セルごとに読むと通信回数が増えて遅くなるため）
+    var rowRange = sh.getRange(row, 1, 1, width);
+    var vals = rowRange.getValues()[0];
+    var disp = rowRange.getDisplayValues()[0];
+    timer.mark('readRow');
 
     // 元データの一致確認（他の人が同時に編集した場合の誤上書き防止）
-    var curItem = String(sh.getRange(row, cm.item).getDisplayValue()).trim();
-    var curAmtRaw = sh.getRange(row, cm.amount).getValue();
+    var curItem = String(disp[cm.item - 1]).trim();
+    var curAmtRaw = vals[cm.amount - 1];
     var curAmt = (typeof curAmtRaw === 'number') ? curAmtRaw
       : Number(String(curAmtRaw).replace(/[¥￥,，\s]/g, '')) || 0;
     if (sd_norm_(curItem) !== sd_norm_(payload.orig.item) || Math.round(curAmt) !== Math.round(Number(payload.orig.amount))) {
@@ -1065,10 +1105,10 @@ function sd_updateRow(token, payload) {
     }
     // 対象行の年月を読み、その月が振込済みならマスター以外は編集不可
     var rowYm = '';
-    var ymRaw = sh.getRange(row, cm.ym).getValue();
+    var ymRaw = vals[cm.ym - 1];
     if (ymRaw instanceof Date) rowYm = sd_fmtMonth_(ymRaw);
     else {
-      var mm = String(sh.getRange(row, cm.ym).getDisplayValue()).match(/(\d{4})[\/\-年.](\d{1,2})/);
+      var mm = String(disp[cm.ym - 1]).match(/(\d{4})[\/\-年.](\d{1,2})/);
       if (mm) rowYm = mm[1] + '-' + ('0' + mm[2]).slice(-2);
     }
     if (rowYm) sd_requireUnlocked_(user, payload.store, rowYm);
@@ -1077,21 +1117,18 @@ function sd_updateRow(token, payload) {
     var newAmt = Number(String(payload.amount).replace(/[¥￥,，\s]/g, ''));
     if (isNaN(newAmt)) throw new Error('金額が数値ではありません');
 
-    // 修正日列が無ければヘッダー行に自動作成
-    if (!cm.edited) {
-      var width = 0;
-      Object.keys(cm).forEach(function (k) { if (cm[k] > width) width = cm[k]; });
-      sh.getRange(st.db.headerRow, width + 1).setValue('修正日');
-      cm.edited = width + 1;
-    }
-    sh.getRange(row, cm.kubun).setValue(payload.kubun || '変動費');
-    sh.getRange(row, cm.item).setValue(newItem);
-    sh.getRange(row, cm.amount).setValue(newAmt);
-    if (cm.tax) sh.getRange(row, cm.tax).setValue(payload.tax || '10%');
-    if (cm.note) sh.getRange(row, cm.note).setValue(String(payload.note || ''));
-    sh.getRange(row, cm.edited).setValue(Utilities.formatDate(new Date(), SD_TZ, 'M/d') + ' ' + user.name);
+    // 変更するセルだけ書き換えて、行全体を1回で書き戻す
+    vals[cm.kubun - 1] = payload.kubun || '変動費';
+    vals[cm.item - 1] = newItem;
+    vals[cm.amount - 1] = newAmt;
+    if (cm.tax) vals[cm.tax - 1] = payload.tax || '10%';
+    if (cm.note) vals[cm.note - 1] = String(payload.note || '');
+    vals[cm.edited - 1] = Utilities.formatDate(new Date(), SD_TZ, 'M/d') + ' ' + user.name;
+    rowRange.setValues([vals]);
+    timer.mark('write');
     sd_clearRowsCache_(st.db.sheet);
-    return { ok: true, row: row, item: newItem };
+    timer.mark('cacheClear');
+    return { ok: true, row: row, item: newItem, _ms: timer.breakdown() };
   } finally {
     lock.releaseLock();
   }
@@ -1101,9 +1138,12 @@ function sd_updateRow(token, payload) {
  * 誤削除防止のため、削除前に元の費目名・金額が一致するかをサーバー側でも検証する。 */
 function sd_deleteRow(token, payload) {
   // payload = { store, row, orig:{item, amount} }
+  var timer = sd_timer_();
   var user = sd_auth_(token, true);
+  timer.mark('auth');
   var lock = LockService.getDocumentLock();
   lock.waitLock(20000);
+  timer.mark('lockWait');
   try {
     var det = sd_detect_();
     var cfg = sd_config_(sd_masterStores_(det), det);
@@ -1114,10 +1154,19 @@ function sd_deleteRow(token, payload) {
     var cm = st.db.colMap;
     var row = Number(payload.row);
     if (!row || row <= st.db.headerRow) throw new Error('行番号が不正です');
+    timer.mark('detectSheets');
+
+    // 行全体を1回で読み込む（セルごとに読むと通信回数が増えて遅くなるため）
+    var width = 0;
+    Object.keys(cm).forEach(function (k) { if (cm[k] > width) width = cm[k]; });
+    var rowRange = sh.getRange(row, 1, 1, width);
+    var vals = rowRange.getValues()[0];
+    var disp = rowRange.getDisplayValues()[0];
+    timer.mark('readRow');
 
     // 元データの一致確認（他の人が同時に編集した場合の誤削除防止）
-    var curItem = String(sh.getRange(row, cm.item).getDisplayValue()).trim();
-    var curAmtRaw = sh.getRange(row, cm.amount).getValue();
+    var curItem = String(disp[cm.item - 1]).trim();
+    var curAmtRaw = vals[cm.amount - 1];
     var curAmt = (typeof curAmtRaw === 'number') ? curAmtRaw
       : Number(String(curAmtRaw).replace(/[¥￥,，\s]/g, '')) || 0;
     if (sd_norm_(curItem) !== sd_norm_(payload.orig.item) || Math.round(curAmt) !== Math.round(Number(payload.orig.amount))) {
@@ -1125,18 +1174,20 @@ function sd_deleteRow(token, payload) {
     }
     // 対象行の年月を読み、その月が振込済みならマスター以外は削除不可
     var rowYm = '';
-    var ymRaw = sh.getRange(row, cm.ym).getValue();
+    var ymRaw = vals[cm.ym - 1];
     if (ymRaw instanceof Date) rowYm = sd_fmtMonth_(ymRaw);
     else {
-      var mm = String(sh.getRange(row, cm.ym).getDisplayValue()).match(/(\d{4})[\/\-年.](\d{1,2})/);
+      var mm = String(disp[cm.ym - 1]).match(/(\d{4})[\/\-年.](\d{1,2})/);
       if (mm) rowYm = mm[1] + '-' + ('0' + mm[2]).slice(-2);
     }
     if (rowYm) sd_requireUnlocked_(user, payload.store, rowYm);
 
     sh.deleteRow(row);
+    timer.mark('deleteRow');
     sd_clearRowsCache_(st.db.sheet);
     sd_log_('明細削除', payload.store, rowYm, curItem + '（¥' + curAmt.toLocaleString() + '）', '', '', user.name, '');
-    return { ok: true, item: curItem, amount: curAmt };
+    timer.mark('log');
+    return { ok: true, item: curItem, amount: curAmt, _ms: timer.breakdown() };
   } finally {
     lock.releaseLock();
   }
@@ -1839,7 +1890,15 @@ function sd_remindTick() {
 
 /* ---------- ③ 添付ファイル ---------- */
 
+/* 月・店舗フォルダのIDを10分キャッシュ（毎回2段階のフォルダ検索をするとDrive APIの往復が
+ * 積み重なって遅くなるため。フォルダ自体を作り直した場合は最大10分古い情報を見る可能性あり）。 */
 function sd_folderFor_(ext, monthKey, store) {
+  var cacheKey = 'sdfolder_' + monthKey + '_' + store;
+  var cache = CacheService.getScriptCache();
+  var cachedId = cache.get(cacheKey);
+  if (cachedId) {
+    try { return DriveApp.getFolderById(cachedId); } catch (e) { /* フォルダが消えていたら通常経路へ */ }
+  }
   var parent;
   try {
     parent = DriveApp.getFolderById(ext['添付親フォルダID']);
@@ -1848,7 +1907,9 @@ function sd_folderFor_(ext, monthKey, store) {
   }
   var mName = sd_monthLabel_(monthKey); // 例: 2026年6月
   var mFolder = sd_childFolder_(parent, mName);
-  return sd_childFolder_(mFolder, store);
+  var storeFolder = sd_childFolder_(mFolder, store);
+  try { cache.put(cacheKey, storeFolder.getId(), 600); } catch (e) { /* キャッシュ失敗は無視 */ }
+  return storeFolder;
 }
 
 function sd_childFolder_(parent, name) {
@@ -1859,14 +1920,17 @@ function sd_childFolder_(parent, name) {
 function sd_uploadAttachment(token, payload) {
   // payload = { store, month, kind, fileName, mimeType, b64, revised }
   // revised=true のときは、同名ファイルが既にあれば上書きせず「【再】費目名_…」で保存する
+  var timer = sd_timer_();
   var user = sd_auth_(token, true);
   sd_requireUnlocked_(user, payload.store, payload.month);
+  timer.mark('auth');
   var ext = sd_extConfig_();
   var kind = String(payload.kind || '').trim();
   if (!kind) throw new Error('何の書類か（例: カード売上）を入力してください');
   var extMatch = String(payload.fileName || '').match(/\.[A-Za-z0-9]+$/);
   var extension = extMatch ? extMatch[0] : '';
   var folder = sd_folderFor_(ext, payload.month, payload.store);
+  timer.mark('folderLookup');
 
   var baseName = kind + '_' + sd_monthDot_(payload.month) + '_' + payload.store;
   var newName = baseName + extension;
@@ -1878,11 +1942,15 @@ function sd_uploadAttachment(token, payload) {
     }
     newName = prefix + baseName + extension;
   }
+  timer.mark('dupCheck');
   var bytes = Utilities.base64Decode(payload.b64);
   var blob = Utilities.newBlob(bytes, payload.mimeType || 'application/octet-stream', newName);
+  timer.mark('decode');
   var file = folder.createFile(blob);
+  timer.mark('driveCreate');
   sd_log_(payload.revised ? '添付（修正版）' : '添付アップロード', payload.store, payload.month, newName, file.getId(), file.getUrl(), user.name, '');
-  return { ok: true, name: newName, url: file.getUrl(), folder: sd_monthLabel_(payload.month) + '／' + payload.store };
+  timer.mark('log');
+  return { ok: true, name: newName, url: file.getUrl(), folder: sd_monthLabel_(payload.month) + '／' + payload.store, _ms: timer.breakdown() };
 }
 
 function sd_listAttachments(token, store, monthKey) {

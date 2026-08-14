@@ -423,8 +423,8 @@
   var API_MAP = {
 sd_login:function(id,pw){ROLE=(id.indexOf('master')>-1)?'マスター':((id.indexOf('honbu')>-1)?'本部':'委託先');NAME=(ROLE==='マスター')?'マスター':((ROLE==='本部')?'本部':'FAM Dining様');return ({token:'tk',name:NAME,role:ROLE});},
       sd_getDashboard:function(t,mk){return (dash());},
-      sd_updateRow:function(t,p){EDITED[p.store+'|'+p.row]='7/18 '+NAME;return ({ok:true,row:p.row,item:p.item});},
-      sd_deleteRow:function(t,p){return ({ok:true,item:p.orig.item,amount:p.orig.amount});},
+      sd_updateRow:function(t,p){EDITED[p.store+'|'+p.row]='7/18 '+NAME;return ({ok:true,row:p.row,item:p.item,_ms:{auth:20,lockWait:5,detectSheets:300,readRow:400,write:900,cacheClear:10,total:1635}});},
+      sd_deleteRow:function(t,p){return ({ok:true,item:p.orig.item,amount:p.orig.amount,_ms:{auth:15,lockWait:5,detectSheets:280,readRow:380,deleteRow:1200,log:150,total:2030}});},
       sd_setPaid:function(t,s,mk,dn,sm){PAID[s]=dn?{done:true,date:'2026-07-18',by:NAME}:null;return ({ok:true,store:s,month:mk,done:dn,mailed:!!(dn&&sm),to:'sample@example.com'});},
       sd_addRows:function(t,p){return ({ok:true,added:p.rows.length,sheet:'（プレビュー）',month:p.month});},
       sd_uploadAttachment:function(t,p){return ({ok:true,name:p.kind+'_2026.06_'+p.store+'.pdf',url:'#',folder:'2026年6月／'+p.store});},
@@ -521,6 +521,21 @@ function apiAuth(fn){
 function toast(msg,ms){ var t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._tm); t._tm=setTimeout(function(){t.classList.remove('show')},ms||3800); }
 function loading(on,msg){ document.getElementById('loading').classList.toggle('show',!!on); document.getElementById('loading-msg').textContent=msg||'読み込み中…'; }
 function yen(n){ return '¥'+Number(n||0).toLocaleString('ja-JP'); }
+/* 速度計測: サーバー内訳(_ms)と往復時間を計測してconsoleに出し、短い要約文字列を返す。
+ * 「アップロード/編集が遅い」原因の切り分け用（GAS内部が遅いのか、通信往復が遅いのか）。 */
+function timedApiAuth(label, fn){
+  var args=Array.prototype.slice.call(arguments,2);
+  var t0=performance.now();
+  return apiAuth.apply(null,[fn].concat(args)).then(function(res){
+    var roundTrip=Math.round(performance.now()-t0);
+    var serverTotal=res && res._ms ? res._ms.total : null;
+    console.log('⏱ ['+label+'] 往復:'+roundTrip+'ms／サーバー内訳:', res&&res._ms);
+    var summary = serverTotal!=null
+      ? '（サーバー'+(serverTotal/1000).toFixed(1)+'秒／往復'+(roundTrip/1000).toFixed(1)+'秒）'
+      : '（往復'+(roundTrip/1000).toFixed(1)+'秒）';
+    return {res:res, summary:summary, roundTrip:roundTrip, serverTotal:serverTotal};
+  });
+}
 function man(n){ return (n>=100000||n<=-100000) ? Math.round(n/10000).toLocaleString()+'万' : Number(n||0).toLocaleString(); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function mLabel(key){ var p=key.split('-'); return Number(p[0])+'年'+Number(p[1])+'月'; }
@@ -1090,15 +1105,15 @@ function saveEditRow(rowIdx){
   if(!confirm('【確認】この明細を修正します。\n\n'+r.item+'（'+yen(r.amount)+'）\n　↓\n'+item+'（'+yen(Number(amount))+'）'+(file?'\n\n📎 資料「'+file.name+'」も保存します。':'')+'\n\nよろしいですか？')) return;
   closeModal(); loading(true,'修正中…');
   var storeName=st.name, month=state.month;
-  apiAuth('sd_updateRow',{store:storeName,row:r.row,orig:{item:r.item,amount:r.amount},
+  timedApiAuth('修正','sd_updateRow',{store:storeName,row:r.row,orig:{item:r.item,amount:r.amount},
     kubun:document.getElementById('ed-kubun').value,item:item,amount:Number(amount),
     tax:document.getElementById('ed-tax').value,note:document.getElementById('ed-note').value.trim()})
-    .then(function(res){
-      if(!file){ loading(false); toast('✏️ 修正しました（修正日を記録）'); loadDashboard(month,true); return; }
+    .then(function(t){
+      if(!file){ loading(false); toast('✏️ 修正しました（修正日を記録）'+t.summary); loadDashboard(month,true); return; }
       loading(true,'資料をアップロード中…');
       return readFileB64(file).then(function(b64){
-        return apiAuth('sd_uploadAttachment',{store:storeName,month:month,kind:item,fileName:file.name,mimeType:file.type,b64:b64,revised:true})
-          .then(function(u){ loading(false); toast('✏️ 修正しました（資料「'+u.name+'」も保存）'); loadDashboard(month,true); });
+        return timedApiAuth('修正+添付','sd_uploadAttachment',{store:storeName,month:month,kind:item,fileName:file.name,mimeType:file.type,b64:b64,revised:true})
+          .then(function(t2){ loading(false); toast('✏️ 修正しました（資料「'+t2.res.name+'」も保存）'+t2.summary); loadDashboard(month,true); });
       });
     })
     .catch(function(e){ loading(false); toast('修正エラー: '+(e.message||e)); });
@@ -1116,8 +1131,8 @@ function deleteRow(rowIdx){
   if(!ok) return;
   loading(true,'削除中…');
   var month=state.month;
-  apiAuth('sd_deleteRow',{store:st.name,row:r.row,orig:{item:r.item,amount:r.amount}})
-    .then(function(res){ loading(false); toast('🗑 削除しました：'+res.item+'（'+yen(res.amount)+'）'); loadDashboard(month,true); })
+  timedApiAuth('削除','sd_deleteRow',{store:st.name,row:r.row,orig:{item:r.item,amount:r.amount}})
+    .then(function(t){ loading(false); toast('🗑 削除しました：'+t.res.item+'（'+yen(t.res.amount)+'）'+t.summary); loadDashboard(month,true); })
     .catch(function(e){ loading(false); toast('削除エラー: '+(e.message||e)); });
 }
 
@@ -1182,6 +1197,7 @@ function submitRows(force){
   var rowsForApi=rows.map(function(r){return {kubun:r.kubun,item:r.item,amount:r.amount,tax:r.tax,note:r.note};});
   var btn=document.getElementById('submit-btn');
   btn.disabled=true; loading(true,'登録中…');
+  var t0=performance.now();
   apiAuth('sd_addRows',{store:store,month:month,editor:editor,rows:rowsForApi,force:!!force})
     .then(function(res){
       if(res&&res.dup){
@@ -1189,7 +1205,8 @@ function submitRows(force){
         if(confirm('⚠ 同じ月に同じ費目・金額が既にあります:\n・'+res.dup.join('\n・')+'\n\n重複してもこのまま登録しますか？')) submitRows(true);
         return;
       }
-      if(!files.length){ finishSubmit(res, month, 0); return; }
+      console.log('⏱ [明細登録] サーバー内訳:', res._ms);
+      if(!files.length){ finishSubmit(res, month, 0, t0); return; }
       // 添付ファイルを順にアップロード
       loading(true,'資料をアップロード中…（'+files.length+'件）');
       var uploaded=0;
@@ -1198,20 +1215,21 @@ function submitRows(force){
         chain=chain.then(function(){
           return readFileB64(r.file).then(function(b64){
             return apiAuth('sd_uploadAttachment',{store:store,month:month,kind:r.item,fileName:r.file.name,mimeType:r.file.type,b64:b64})
-              .then(function(){ uploaded++; });
+              .then(function(u){ uploaded++; console.log('⏱ [添付'+uploaded+'] サーバー内訳:', u._ms); });
           });
         });
       });
-      chain.then(function(){ finishSubmit(res, month, uploaded); })
+      chain.then(function(){ finishSubmit(res, month, uploaded, t0); })
         .catch(function(e){ btn.disabled=false; loading(false); toast('明細は登録されましたが資料アップロードでエラー: '+(e.message||e)); loadDashboard(month,true); });
     })
     .catch(function(e){ btn.disabled=false; loading(false); toast('登録エラー: '+(e.message||e)); });
 }
-function finishSubmit(res, month, uploaded){
+function finishSubmit(res, month, uploaded, t0){
   document.getElementById('submit-btn').disabled=false;
   document.getElementById('entry-rows').innerHTML='';
   addEntryRow(); addEntryRow(); addEntryRow();
-  toast('✅ '+mLabel(res.month)+'分として '+res.added+'件 登録しました'+(uploaded?'（資料'+uploaded+'件も保存）':''));
+  var elapsed=t0?((performance.now()-t0)/1000).toFixed(1)+'秒':'';
+  toast('✅ '+mLabel(res.month)+'分として '+res.added+'件 登録しました'+(uploaded?'（資料'+uploaded+'件も保存）':'')+(elapsed?'（'+elapsed+'）':''));
   loadDashboard(month,true);
 }
 
@@ -1332,10 +1350,10 @@ function uploadAttach(){
   reader.onload=function(){
     var b64=String(reader.result).split(',')[1];
     loading(true,'アップロード中…');
-    apiAuth('sd_uploadAttachment',{store:attachCtx.store,month:state.month,kind:kind,fileName:f.name,mimeType:f.type,b64:b64})
-      .then(function(res){
+    timedApiAuth('添付アップロード','sd_uploadAttachment',{store:attachCtx.store,month:state.month,kind:kind,fileName:f.name,mimeType:f.type,b64:b64})
+      .then(function(t){
         loading(false);
-        toast('✅ '+res.name+' を保存しました（'+res.folder+'）');
+        toast('✅ '+t.res.name+' を保存しました（'+t.res.folder+'）'+t.summary);
         apiAuth('sd_listAttachments', attachCtx.store, state.month).then(function(files){ renderAttachModal(attachCtx.store, files); });
       })
       .catch(function(e){ loading(false); toast('アップロードエラー: '+(e.message||e)); });
