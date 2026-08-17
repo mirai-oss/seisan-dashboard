@@ -448,25 +448,31 @@ function yen(n){ return '¥'+Number(n||0).toLocaleString('ja-JP'); }
 var perfHistory = [];
 var perfOp = null; // 進行中の操作（例: 修正→再読込）をまとめるためのバッファ
 function perfOpStart(label){ perfOp = {label:label, t0:performance.now(), steps:[]}; }
-function perfStep(label, serverMs, roundTripMs){
-  var entry = {label:label, server:serverMs, rt:roundTripMs};
+/* サーバーの内訳(_ms)を「auth:0.0s detectSheets:0.3s 店舗:秋葉原 肉寿司:2.1s」のような文字列にする。
+ * どのサブ処理が重いかを画面上で直接確認できるようにするため（開発者ツール不要）。 */
+function fmtBreakdown(ms){
+  if(!ms) return '';
+  return Object.keys(ms).filter(function(k){return k!=='total';})
+    .map(function(k){ return k+':'+(ms[k]/1000).toFixed(1)+'s'; }).join(' ');
+}
+function perfStep(label, serverMs, roundTripMs, fullMs){
+  var entry = {label:label, server:serverMs, rt:roundTripMs, detail:fmtBreakdown(fullMs)};
   if(perfOp) perfOp.steps.push(entry);
-  console.log('⏱ ['+label+'] サーバー:'+(serverMs!=null?serverMs+'ms':'?')+' ／往復:'+roundTripMs+'ms');
-  renderPerfEntry(entry, perfOp && perfOp.steps.length>1 ? null : (perfOp?perfOp.label:label));
+  console.log('⏱ ['+label+'] サーバー:'+(serverMs!=null?serverMs+'ms':'?')+' ／往復:'+roundTripMs+'ms／内訳:', fullMs);
   return entry;
 }
 function perfOpEnd(){
   if(!perfOp) return;
   var total=Math.round(performance.now()-perfOp.t0);
   var line = perfOp.steps.map(function(s){
-    return s.label+' サーバー'+(s.server!=null?(s.server/1000).toFixed(1)+'s':'?')+'/往復'+(s.rt/1000).toFixed(1)+'s';
+    var base = s.label+' サーバー'+(s.server!=null?(s.server/1000).toFixed(1)+'s':'?')+'/往復'+(s.rt/1000).toFixed(1)+'s';
+    return s.detail ? base+'［内訳: '+s.detail+'］' : base;
   }).join(' → ');
   perfHistory.unshift({time:new Date().toLocaleTimeString('ja-JP'), label:perfOp.label, line:line, total:total});
   perfHistory = perfHistory.slice(0,8);
   renderPerfPanel();
   perfOp = null;
 }
-function renderPerfEntry(){ /* 個別ステップ時点では合計行のみ更新すれば十分なので何もしない（perfOpEndでまとめて描画） */ }
 function renderPerfPanel(){
   var el = document.getElementById('perf-panel');
   if(!el) return;
@@ -485,7 +491,7 @@ function timedApiAuth(label, fn){
   return apiAuth.apply(null,[fn].concat(args)).then(function(res){
     var roundTrip=Math.round(performance.now()-t0);
     var serverTotal=res && res._ms ? res._ms.total : null;
-    perfStep(label, serverTotal, roundTrip);
+    perfStep(label, serverTotal, roundTrip, res&&res._ms);
     var summary = serverTotal!=null
       ? '（サーバー'+(serverTotal/1000).toFixed(1)+'秒／往復'+(roundTrip/1000).toFixed(1)+'秒）'
       : '（往復'+(roundTrip/1000).toFixed(1)+'秒）';
@@ -645,7 +651,7 @@ function loadDashboard(monthKey, force){
   var t0=performance.now();
   apiAuth('sd_getDashboard', monthKey||null).then(function(data){
     var rt=Math.round(performance.now()-t0);
-    perfStep('再読込', data._ms?data._ms.total:null, rt);
+    perfStep('再読込', data._ms?data._ms.total:null, rt, data._ms);
     perfOpEnd(); // ここで一連の操作（修正→再読込 等）の合計が確定する
     dashCache[key]=data; dashCache[data.month]=data;
     state.data=data; state.month=data.month;

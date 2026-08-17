@@ -745,26 +745,53 @@ function sd_allowedStores_(user, cfg) {
 
 /* ---------- DB読み取り／入力漏れ判定（v1と同じ） ---------- */
 
-/* DB読み取りのキャッシュ版（月切替の高速化用・3分）。
- * 明細を変更したら sd_clearRowsCache_ で必ずクリアすること。 */
+/* DB読み取りのキャッシュ版（月切替の高速化用・10分）。
+ * 明細を変更したら sd_clearRowsCache_ で必ずクリアすること。
+ *
+ * CacheServiceは1キーあたり100KBまでしか保存できない。以前は95KBを超える
+ * 店舗（明細が多い・運用が長い店舗）は「キャッシュに入らない」まま黙って
+ * 素通りしていたため、その店舗だけ毎回シートを丸ごと読み直して常に遅く
+ * なっていた。ここでは複数キーに分割して保存することで上限を回避する。 */
+var SD_ROWS_CACHE_TTL = 600; // 秒
+var SD_ROWS_CACHE_CHUNK = 90000; // 1キーあたりの文字数（100KB上限に余裕を持たせる）
+
 function sd_readRowsCached_(db) {
   var cache = CacheService.getScriptCache();
-  var key = 'sdrows_' + db.sheet;
-  var hit = cache.get(key);
-  if (hit) { try { return JSON.parse(hit); } catch (e) { /* 壊れていたら読み直す */ } }
+  var metaKey = 'sdrows_' + db.sheet + '_n';
+  var n = Number(cache.get(metaKey) || 0);
+  if (n > 0) {
+    try {
+      var keys = [];
+      for (var i = 0; i < n; i++) keys.push('sdrows_' + db.sheet + '_' + i);
+      var parts = cache.getAll(keys);
+      var ok = keys.every(function (k) { return parts[k] != null; });
+      if (ok) return JSON.parse(keys.map(function (k) { return parts[k]; }).join(''));
+    } catch (e) { /* 壊れていたら読み直す */ }
+  }
   var rows = sd_readRows_(db);
   try {
     var s = JSON.stringify(rows);
-    if (s.length < 95000) cache.put(key, s, 180); // CacheServiceの100KB上限に余裕を持たせる
-  } catch (e) { /* キャッシュ失敗は無視 */ }
+    var count = Math.max(1, Math.ceil(s.length / SD_ROWS_CACHE_CHUNK));
+    var toPut = {};
+    for (var c = 0; c < count; c++) toPut['sdrows_' + db.sheet + '_' + c] = s.substr(c * SD_ROWS_CACHE_CHUNK, SD_ROWS_CACHE_CHUNK);
+    toPut[metaKey] = String(count);
+    cache.putAll(toPut, SD_ROWS_CACHE_TTL);
+  } catch (e) { /* キャッシュ失敗（極端に大きい等）は無視して素通り */ }
   return rows;
 }
 function sd_clearRowsCache_(sheetName) {
-  try { CacheService.getScriptCache().remove('sdrows_' + sheetName); } catch (e) { /* 無視 */ }
+  try {
+    var cache = CacheService.getScriptCache();
+    var metaKey = 'sdrows_' + sheetName + '_n';
+    var n = Number(cache.get(metaKey) || 0);
+    var keys = [metaKey, 'sdrows_' + sheetName]; // 旧形式キーも念のため掃除
+    for (var i = 0; i < n; i++) keys.push('sdrows_' + sheetName + '_' + i);
+    cache.removeAll(keys);
+  } catch (e) { /* 無視 */ }
 }
 function sd_clearAllRowsCache_(det) {
   try {
-    (det || sd_detect_()).dbs.forEach(function (db) { CacheService.getScriptCache().remove('sdrows_' + db.sheet); });
+    (det || sd_detect_()).dbs.forEach(function (db) { sd_clearRowsCache_(db.sheet); });
   } catch (e) { /* 無視 */ }
 }
 
@@ -909,6 +936,7 @@ function sd_getDashboard(token, monthKey) {
 
   var stores = cfg.map(function (st) {
     var rows = st.db ? sd_readRowsCached_(st.db) : [];
+    timer.mark('店舗:' + st.name);
     var byMonth = {};
     rows.forEach(function (r) {
       (byMonth[r.ym] = byMonth[r.ym] || []).push(r);
