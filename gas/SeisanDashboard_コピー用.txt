@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.7-paidamt';
+var SD_VERSION = 'v5.8-corppay';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -26,6 +26,7 @@ var SD_SSO_SUPA_URL = 'https://uuvsxzhpxtghojoubjcc.supabase.co';
 var SD_SSO_SUPA_KEY = 'sb_publishable_MrwPJAx_Ws_fdRutprKCiQ_dg3wCiTr';
 var SD_START_MONTH = '2026-03'; // これより前の月はプルダウンに出さない
 var SD_PAID_SHEET = '振込管理_精算ダッシュボード';
+var SD_NO_CLIENT_LABEL = '（委託先未設定）'; // 委託先（法人）が未設定の店舗をグルーピングする際の仮キー
 var SD_CORP_SHEET = '法人設定_精算ダッシュボード';
 var SD_CONFIG_SHEET = '設定_精算ダッシュボード';
 var SD_EXT_SHEET = '設定_外部連携';
@@ -358,7 +359,7 @@ function sd_paidSheet_() {
   var sh = ss.getSheetByName(SD_PAID_SHEET);
   if (!sh) {
     sh = ss.insertSheet(SD_PAID_SHEET);
-    sh.getRange(1, 1, 1, 6).setValues([['店舗名', '対象月', '振込済み', '日付', '記録者', '振込金額']]);
+    sh.getRange(1, 1, 1, 6).setValues([['対象（法人名）', '対象月', '振込済み', '日付', '記録者', '振込金額']]);
     sh.setFrozenRows(1);
   } else if (String(sh.getRange(1, 6).getValue()) !== '振込金額') {
     sh.getRange(1, 6).setValue('振込金額'); // 旧シート（5列）を6列に拡張
@@ -366,20 +367,22 @@ function sd_paidSheet_() {
   return sh;
 }
 
-/* 振込済みシートは「1店舗×1月=1行の状態」ではなく「操作イベントの履歴」として積み上げる。
+/* 振込済みシートは「1行=1状態」ではなく「操作イベントの履歴」として積み上げる。
  * 振込済みにする操作のたびに1行追加され、振込金額はそのイベントごとの入力額。
  * 解除操作には金額が付かず、累計（total）はリセットしない
- * （精算修正→再振込のときに差額分だけ追加入力できるようにするため）。 */
+ * （精算修正→再振込のときに差額分だけ追加入力できるようにするため）。
+ * v5.8以降は列Aに「法人名」を書き込む（振込は法人単位でまとめて行われるため）。
+ * v5.7以前の店舗名で書かれた行も、後方互換のため引き続き読み取る（sd_paidStatusMap_参照）。 */
 function sd_paidMap_() {
   var sh = sd_paidSheet_();
   var lastR = sh.getLastRow();
   var out = {};
   if (lastR < 2) return out;
   sh.getRange(2, 1, lastR - 1, 6).getDisplayValues().forEach(function (r) {
-    var store = sd_norm_(r[0]), mk = String(r[1]).trim();
-    if (!store || !mk) return;
-    out[store] = out[store] || {};
-    var cur = out[store][mk] || { done: false, date: '', by: '', total: 0 };
+    var key = sd_norm_(r[0]), mk = String(r[1]).trim();
+    if (!key || !mk) return;
+    out[key] = out[key] || {};
+    var cur = out[key][mk] || { done: false, date: '', by: '', total: 0 };
     var isPaidEvent = sd_norm_(r[2]).toUpperCase() === 'TRUE' || r[2] === '✅';
     cur.done = isPaidEvent; // 行は時系列順に並ぶため、最後に読んだ行が現在の状態
     cur.date = r[3];
@@ -388,15 +391,52 @@ function sd_paidMap_() {
       var amt = Number(String(r[5]).replace(/[^0-9.\-]/g, ''));
       if (amt) cur.total += amt;
     }
-    out[store][mk] = cur;
+    out[key][mk] = cur;
   });
   return out;
 }
 
-function sd_setPaid(token, store, monthKey, done, sendMail, amount) {
+/* 店舗名 → 委託先（法人名）。未設定はSD_NO_CLIENT_LABELに丸める。
+ * 店舗設定マスターの全件走査（sd_detect_+sd_masterStores_）が必要なため、10分キャッシュする。 */
+function sd_clientOfMap_() {
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get('sd_clientOfMap');
+  if (hit) { try { return JSON.parse(hit); } catch (e) { /* 壊れていたら作り直す */ } }
+  var det = sd_detect_();
+  var map = {};
+  sd_masterStores_(det).forEach(function (s) { map[sd_norm_(s.name)] = s.client ? s.client : SD_NO_CLIENT_LABEL; });
+  cache.put('sd_clientOfMap', JSON.stringify(map), 600);
+  return map;
+}
+function sd_clientOf_(store) {
+  return sd_clientOfMap_()[sd_norm_(store)] || SD_NO_CLIENT_LABEL;
+}
+
+/* 振込状態は法人（委託先）単位が正。旧・店舗単位の記録（v5.7以前）もフォールバックとして見る。 */
+function sd_paidStatusMap_(store, client, paidAll) {
+  var byClient = (paidAll[sd_norm_(client || SD_NO_CLIENT_LABEL)] || {});
+  var byStore = (paidAll[sd_norm_(store)] || {});
+  var months = {};
+  Object.keys(byStore).forEach(function (mk) { months[mk] = true; });
+  Object.keys(byClient).forEach(function (mk) { months[mk] = true; });
+  var out = {};
+  Object.keys(months).forEach(function (mk) {
+    var c = byClient[mk], s = byStore[mk];
+    out[mk] = (c && c.done) ? c : ((s && s.done) ? s : (c || s));
+  });
+  return out;
+}
+
+/* client: 法人名（委託先未設定の店舗群はSD_NO_CLIENT_LABEL）。振込はその法人配下の全店舗分をまとめて記録する。 */
+function sd_setPaid(token, client, monthKey, done, sendMail, amount) {
   var user = sd_auth_(token, true);
+  var det = sd_detect_();
+  var cfg = sd_config_(sd_masterStores_(det), det);
+  var members = cfg.filter(function (s) { return sd_norm_(s.client ? s.client : SD_NO_CLIENT_LABEL) === sd_norm_(client); });
+  if (!members.length) throw new Error('「' + client + '」に該当する店舗が見つかりません');
+
   // 振込済み→未振込に戻す（ロック解除）操作はマスターのみ許可。振込済みにする操作（ロック開始）は本部でも可。
-  if (!done && sd_isLocked_(store, monthKey)) sd_requireMaster_(user);
+  if (!done && members.some(function (s) { return sd_isLocked_(s.name, monthKey); })) sd_requireMaster_(user);
 
   var amt = 0;
   if (done) {
@@ -405,36 +445,42 @@ function sd_setPaid(token, store, monthKey, done, sendMail, amount) {
   }
 
   var sh = sd_paidSheet_();
-  var rec = [store, monthKey, done ? 'TRUE' : 'FALSE',
+  var rec = [client, monthKey, done ? 'TRUE' : 'FALSE',
     done ? Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd') : '', user.name,
     done ? amt : ''];
   sh.appendRow(rec); // 履歴として毎回追加（上書きしない）
 
-  var result = { ok: true, store: store, month: monthKey, done: !!done, mailed: false, amount: done ? amt : null };
+  var result = { ok: true, client: client, month: monthKey, done: !!done, mailed: false, amount: done ? amt : null, mailedStores: [] };
   if (done && sendMail) {
-    var det = sd_detect_();
     var ext = sd_extConfig_();
-    var ms = sd_mailSettings_(det, store);
-    if (!ms || !ms.to) throw new Error('メール設定シートに「' + store + '」の宛先(To)がありません（振込済みには登録済み）');
     var d = sd_monthKeyToDate_(monthKey);
     var mLabel = (d.getMonth() + 1) + '月';
-    var amountLine = '■振込金額（税込）：' + sd_yen_(amt) + '\n'; // 実際に入力された振込金額を使う
     var sender = ext['メール送信者名'] || '株式会社N-Style';
-    var subject = '【お知らせ】' + mLabel + '分業務委託料 お振込完了のご連絡（' + store + '）';
-    var body = 'ご担当者様\n\nいつも大変お世話になっております。\n' + sender + 'です。\n\n'
-      + mLabel + '分の業務委託料につきまして、お振込が完了いたしましたのでご連絡申し上げます。\n\n'
-      + '■対象店舗：' + store + '\n'
-      + amountLine
-      + '\nご査収のほど、よろしくお願い申し上げます。';
-    if (ext['ダッシュボードURL']) {
-      body += '\n\n──────────────────\n■ 精算ダッシュボード（過去分の精算書もこちらでご確認いただけます）\n' + ext['ダッシュボードURL'] + '\n※ スマホで開けない場合は、リンクを長押しして「Safari/Chromeで開く」を選ぶか、ブラウザにURLを貼り付けてお開きください。';
-    }
-    var opts = { name: sender };
-    if (ms.cc) opts.cc = ms.cc;
-    GmailApp.sendEmail(ms.to, subject, body, opts);
-    sd_log_('振込完了メール', store, monthKey, subject, '', '', user.name, ms.to);
-    result.mailed = true;
-    result.to = ms.to;
+    members.forEach(function (st) {
+      try {
+        var ms = sd_mailSettings_(det, st.name);
+        if (!ms || !ms.to) return; // 宛先未登録の店舗はスキップ（法人内の他店舗は続行）
+        var settle = st.db ? sd_settle_(sd_readRowsCached_(st.db), monthKey, st.rate, st.fixed) : null;
+        var amountLine = (settle && settle.hasSales) ? '■振込金額（税込）：' + sd_yen_(settle.transfer) + '\n' : '';
+        var subject = '【お知らせ】' + mLabel + '分業務委託料 お振込完了のご連絡（' + st.name + '）';
+        var body = 'ご担当者様\n\nいつも大変お世話になっております。\n' + sender + 'です。\n\n'
+          + mLabel + '分の業務委託料につきまして、お振込が完了いたしましたのでご連絡申し上げます。\n\n'
+          + '■対象店舗：' + st.name + '\n'
+          + amountLine
+          + '\nご査収のほど、よろしくお願い申し上げます。';
+        if (ext['ダッシュボードURL']) {
+          body += '\n\n──────────────────\n■ 精算ダッシュボード（過去分の精算書もこちらでご確認いただけます）\n' + ext['ダッシュボードURL'] + '\n※ スマホで開けない場合は、リンクを長押しして「Safari/Chromeで開く」を選ぶか、ブラウザにURLを貼り付けてお開きください。';
+        }
+        var opts = { name: sender };
+        if (ms.cc) opts.cc = ms.cc;
+        GmailApp.sendEmail(ms.to, subject, body, opts);
+        sd_log_('振込完了メール', st.name, monthKey, subject, '', '', user.name, ms.to);
+        result.mailedStores.push(st.name);
+      } catch (e) {
+        sd_log_('振込完了メールエラー', st.name, monthKey, String((e && e.message) || e), '', '', user.name, '');
+      }
+    });
+    result.mailed = result.mailedStores.length > 0;
   }
   // 全店舗の振込が完了したらLarkに月次完了報告（この月で初めて完了したときだけ送信）
   if (done) {
@@ -465,7 +511,8 @@ function sd_maybeNotifyComplete_(monthKey) {
     if (!st.db) return;
     var settle = sd_settle_(sd_readRowsCached_(st.db), monthKey, st.rate, st.fixed);
     if (!settle.hasSales) return; // 売上未入力＝まだ精算対象でない
-    var isPaid = !!((paid[sd_norm_(st.name)] || {})[monthKey] && paid[sd_norm_(st.name)][monthKey].done);
+    var status = sd_paidStatusMap_(st.name, st.client, paid)[monthKey];
+    var isPaid = !!(status && status.done);
     targets.push({ name: st.name, transfer: settle.transfer, paid: isPaid });
     if (!isPaid) allPaid = false;
   });
@@ -730,10 +777,12 @@ function sd_requireMaster_(user) {
   if (user.role !== 'マスター') throw new Error('この操作はマスターアカウントのみ実行できます');
 }
 
-/* 振込済みロック: 対象の店舗・月が振込済みだと、マスター以外は編集不可 */
+/* 振込済みロック: 対象店舗の属する法人・月が振込済みだと、マスター以外は編集不可
+ * （振込は法人単位でまとめて行われるため、ロックも法人配下の全店舗にかかる） */
 function sd_isLocked_(store, monthKey) {
   var paid = sd_paidMap_();
-  var rec = (paid[sd_norm_(store)] || {})[monthKey];
+  var client = sd_clientOf_(store);
+  var rec = sd_paidStatusMap_(store, client, paid)[monthKey];
   return !!(rec && rec.done);
 }
 function sd_requireUnlocked_(user, store, monthKey) {
@@ -955,7 +1004,7 @@ function sd_getDashboard(token, monthKey) {
       return sd_settle_(byMonth[mk] || [], mk, st.rate, fixed);
     }
 
-    var paidByMonth = paidAll[sd_norm_(st.name)] || {};
+    var paidByMonth = sd_paidStatusMap_(st.name, st.client, paidAll); // 法人単位（同じ法人の店舗は同じ状態を共有）
     var matrix = {};
     months.forEach(function (mk) {
       var s = settleFor(mk);
@@ -1908,7 +1957,8 @@ function sd_remindTick() {
     var s = sd_settle_(rows, monthKey, st.rate, st.fixed);
     var chk = sd_missing_(byMonth, monthKey, st.required);
     var isSent = !!((sent[sd_norm_(st.name)] || {})[monthKey]) || (issued[sd_norm_(st.name)] || {})[monthKey] === true;
-    var isPaid = !!((paid[sd_norm_(st.name)] || {})[monthKey] && paid[sd_norm_(st.name)][monthKey].done);
+    var paidStatus = sd_paidStatusMap_(st.name, st.client, paid)[monthKey];
+    var isPaid = !!(paidStatus && paidStatus.done);
     var status = isPaid ? '💰振込済み' : (isSent ? '✅発行済み（振込待ち）' : (s.count > 0 ? '🟡入力中 ' + s.count + '件' : '❌未入力'));
     var warns = chk.catWarn.concat(chk.missing);
     if (isPaid && !warns.length) return; // 完了店舗は省略

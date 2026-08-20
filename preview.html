@@ -120,10 +120,10 @@
   table.matrix .cell-some{color:var(--warn);font-weight:700}
   table.matrix .cell-none{color:var(--ink3)}
   table.matrix .cell-paid{color:var(--paid);font-weight:700}
-  table.matrix .cell-paiddiff{color:var(--bad);font-weight:700}
 
-  .paidline .paid-diff{display:block;margin-top:4px;font-size:12px;color:var(--bad);font-weight:700}
-  .paidline .paid-total{display:block;margin-top:2px;font-size:12px;color:var(--ink3)}
+  .corp .cpaid{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px}
+  .corp .cpaid .diff{color:var(--bad);font-weight:700}
+  .corp .cpaid .ok{color:var(--good);font-weight:700}
 
   .banner{border-radius:var(--radius);padding:14px 16px;margin-bottom:14px;background:var(--accent-soft);border:1px solid #c9dbfb;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
   .banner .big{font-size:18px;font-weight:800;color:var(--accent)}
@@ -398,7 +398,7 @@
   var START='2026-03',THIS='2026-07',TARGET='2026-06';
   var MONTHS=[];var k=START;while(k<=addM(THIS,6)){MONTHS.push(k);k=addM(k,1);}
   var ISSUED=['2026-03','2026-04','2026-05'];
-  var PAID={};
+  var PAID={}; // 法人名 → {done,date,by,total}（実際のGASも法人単位で記録する）
   var EDITED={};
   function settle(sales,varCost,royF,rateP,fx){var royV=Math.round(sales*rateP/100),cT=fx+varCost+royF+royV,tr=sales-cT,ex=Math.round(tr/1.1);
     return {sales:sales,varCost:varCost,royF:royF,royV:royV,royVarDb:0,adj:0,fixedSub:fx,costTotal:cT,transfer:tr,transferEx:ex,tax:tr-ex,ns:royF+royV,hasSales:sales>0,count:0};}
@@ -409,14 +409,17 @@
     rows.forEach(function(r){if(r.kubun==='売上')sales+=r.amount;else if(r.kubun==='固定ロイヤリティ')rf+=r.amount;else vc+=r.amount;});
     var se=settle(sales,vc,rf,rateP,fixed.total);se.count=rows.length;
     var matrix={},issued={};
+    var cpaid=PAID[client]||null;
     MONTHS.forEach(function(mk){matrix[mk]={count:0,sales:null,transfer:null,ns:null,sent:false,paid:false};issued[mk]=ISSUED.indexOf(mk)>-1;});
     Object.keys(hist).forEach(function(mk){var h=hist[mk];var s2=settle(h.s,Math.round(h.s*0.22),440000,rateP,fixed.total);
       matrix[mk]={count:h.c||10,sales:h.s,transfer:s2.transfer,ns:s2.ns,sent:issued[mk],paid:!!h.p,paidTotal:h.p?s2.transfer:0};});
-    matrix[TARGET]={count:rows.length,sales:se.sales,transfer:se.hasSales?se.transfer:null,ns:se.hasSales?se.ns:null,sent:!!sent,paid:!!PAID[name]};
+    matrix[TARGET]={count:rows.length,sales:se.sales,transfer:se.hasSales?se.transfer:null,ns:se.hasSales?se.ns:null,sent:!!sent,paid:!!(cpaid&&cpaid.done),paidTotal:(cpaid&&cpaid.total)||0};
     return {name:name,client:client,rate:rateP.toFixed(1)+'%',fixed:fixed,dbSheet:name,hasDb:true,matrix:matrix,issued:issued,
       detail:{rows:rows,sales:se.sales,cost:se.costTotal,count:rows.length,settle:se,missing:missing,catWarn:catWarn,
-        issuedThis:ISSUED.indexOf(TARGET)>-1||!!sent,sent:sent||null,paid:PAID[name]||null}};}
+        issuedThis:ISSUED.indexOf(TARGET)>-1||!!sent,sent:sent||null,paid:cpaid,locked:!!(cpaid&&cpaid.done)}};}
   var AKIBA_SENT={at:'2026-07-18 19:20',action:'メール送信',fileId:'d1',fileName:'精算書_2026.06_秋葉原 肉寿司.pdf',to:'sample@example.com'};
+  // FAM Dining は2店舗、MostFunは1店舗 ＝ 「法人単位でまとめて振込」の見え方を確認するためのサンプル構成
+  PAID['株式会社FAM Dining']={done:true,date:'2026-07-19',by:'本部',total:2631938}; // わざと3万円の差額を作る（実際の合計との差を確認用）
   function stores(){return [
     mkStore('秋葉原 肉寿司','株式会社FAM Dining',7.0,{rent:816750,ins:20000,sss:30000},[
       {kubun:'売上',item:'6月現金売上',amount:3146612,tax:'10%',note:'',editor:'中山',at:'7/14',edited:''},
@@ -424,27 +427,31 @@
       {kubun:'変動費',item:'GOSSO仕入（8％）',amount:1829369,tax:'8%',note:'GOSSO',editor:'原',at:'7/15',edited:''},
       {kubun:'固定ロイヤリティ',item:'固定ロイヤリティ',amount:440000,tax:'10%',note:'',editor:'中山',at:'7/15',edited:'7/18 本部'}
     ],['㈱西原商会'],[],{'2026-03':{s:9511378},'2026-04':{s:8187288,p:1},'2026-05':{s:9852299}},AKIBA_SENT),
+    mkStore('渋谷 肉寿司','株式会社FAM Dining',7.0,{rent:500000,ins:10000,sss:20000},[
+      {kubun:'売上',item:'6月現金売上',amount:5000000,tax:'10%',note:'',editor:'中山',at:'7/14',edited:''},
+      {kubun:'変動費',item:'GOSSO仕入',amount:1000000,tax:'8%',note:'GOSSO',editor:'原',at:'7/15',edited:''},
+      {kubun:'固定ロイヤリティ',item:'固定ロイヤリティ',amount:300000,tax:'10%',note:'',editor:'中山',at:'7/15',edited:''}
+    ],[],[],{'2026-04':{s:4800000,p:1},'2026-05':{s:5100000}},null),
     mkStore('川崎　じんべぇ','株式会社MostFun',5.0,{rent:924000,ins:20000,sss:33000},[
       {kubun:'売上',item:'現金売上',amount:3481893,tax:'10%',note:'',editor:'青山',at:'7/15',edited:''}
     ],['ガス料金'],[],{'2026-03':{s:12511491},'2026-04':{s:10491876,p:1},'2026-05':{s:11220450}},null)
   ];}
   var ROLE='本部',NAME='本部';
-  function dash(){var st=stores();if(st[0]){st[0].detail.salesCheck={source:st[0].detail.sales,entered:st[0].detail.sales,diff:0,salesName:st[0].name};
-      var akibaTotal=st[0].detail.settle.transfer-30000; // プレビュー確認用にわざと差額（3万円）を作る
-      st[0].detail.paid={done:true,date:'2026-07-19',by:'本部',total:akibaTotal};st[0].detail.locked=true;
-      st[0].matrix[TARGET].paid=true;st[0].matrix[TARGET].paidTotal=akibaTotal;
-    }if(st[1]){st[1].detail.salesCheck={source:st[1].detail.sales+120000,entered:st[1].detail.sales,diff:-120000,salesName:st[1].name};}return {ver:'v5.4（プレビュー）',user:{name:NAME,role:ROLE},month:TARGET,monthLabel:'2026年6月',
+  function dash(){var st=stores();if(st[0]){st[0].detail.salesCheck={source:st[0].detail.sales,entered:st[0].detail.sales,diff:0,salesName:st[0].name};}
+    var jinbe=st.filter(function(s){return s.client==='株式会社MostFun';})[0];
+    if(jinbe) jinbe.detail.salesCheck={source:jinbe.detail.sales+120000,entered:jinbe.detail.sales,diff:-120000,salesName:jinbe.name};
+    return {ver:'v5.4（プレビュー）',user:{name:NAME,role:ROLE},month:TARGET,monthLabel:'2026年6月',
     months:MONTHS,stores:ROLE==='本部'?st:st.slice(0,1),
     corps:{'株式会社FAMDining':{account:'三井住友 渋谷 普通 1234567',note:''},'株式会社MostFun':{account:'',note:''}},
     kubunOptions:['売上','変動費','固定ロイヤリティ','変動ロイヤリティ','固定調整'],taxOptions:['10%','8%','対象外'],
     sheetUrl:ROLE==='本部'?'https://example.com':'',updatedAt:'2026-07-18 21:00（サンプル）'};}
-  
+
   var API_MAP = {
 sd_login:function(id,pw){ROLE=(id.indexOf('master')>-1)?'マスター':((id.indexOf('honbu')>-1)?'本部':'委託先');NAME=(ROLE==='マスター')?'マスター':((ROLE==='本部')?'本部':'FAM Dining様');return ({token:'tk',name:NAME,role:ROLE});},
-      sd_getDashboard:function(t,mk){var d=dash(); d._ms={auth:20,detectSheets:250,issuedSent:180,paidCorpsPayMap:900,'店舗:秋葉原 肉寿司':4200,'店舗:川崎　じんべぇ':2100,'storesLoop（2店舗）':300,total:7950}; return d;},
+      sd_getDashboard:function(t,mk){var d=dash(); d._ms={auth:20,detectSheets:250,issuedSent:180,paidCorpsPayMap:900,'店舗:秋葉原 肉寿司':4200,'店舗:渋谷 肉寿司':3100,'店舗:川崎　じんべぇ':2100,'storesLoop（3店舗）':300,total:9950}; return d;},
       sd_updateRow:function(t,p){EDITED[p.store+'|'+p.row]='7/18 '+NAME;return ({ok:true,row:p.row,item:p.item,_ms:{auth:20,lockWait:5,detectSheets:300,readRow:400,write:900,cacheClear:10,total:1635}});},
       sd_deleteRow:function(t,p){return ({ok:true,item:p.orig.item,amount:p.orig.amount,_ms:{auth:15,lockWait:5,detectSheets:280,readRow:380,deleteRow:1200,log:150,total:2030}});},
-      sd_setPaid:function(t,s,mk,dn,sm,amt){var prevTotal=(PAID[s]&&PAID[s].total)||0;PAID[s]=dn?{done:true,date:'2026-07-18',by:NAME,total:prevTotal+(Number(amt)||0)}:{done:false,date:PAID[s]?PAID[s].date:'',by:NAME,total:prevTotal};return ({ok:true,store:s,month:mk,done:dn,mailed:!!(dn&&sm),to:'sample@example.com',amount:dn?Number(amt):null});},
+      sd_setPaid:function(t,client,mk,dn,sm,amt){var prevTotal=(PAID[client]&&PAID[client].total)||0;PAID[client]=dn?{done:true,date:'2026-07-18',by:NAME,total:prevTotal+(Number(amt)||0)}:{done:false,date:PAID[client]?PAID[client].date:'',by:NAME,total:prevTotal};return ({ok:true,client:client,month:mk,done:dn,mailed:!!(dn&&sm),mailedStores:(dn&&sm)?stores().filter(function(s){return s.client===client;}).map(function(s){return s.name;}):[],amount:dn?Number(amt):null});},
       sd_addRows:function(t,p){return ({ok:true,added:p.rows.length,sheet:'（プレビュー）',month:p.month});},
       sd_uploadAttachment:function(t,p){return ({ok:true,name:p.kind+'_2026.06_'+p.store+'.pdf',url:'#',folder:'2026年6月／'+p.store});},
       sd_bulkAdd:function(t,p){var ms=[],k=p.fromMonth;while(k<=p.toMonth){ms.push(k);k=addM(k,1);}return ({ok:true,months:ms,item:p.item,amount:p.amount,store:p.store});},
@@ -792,20 +799,11 @@ function render(){
   if(honbu) renderInputView();
 }
 
-/* 振込予定額（精算金額）と実際の振込済み累計との差額。未振込・売上未確定なら null */
-function paidDiffFor(st){
-  var dt=st.detail;
-  if (!dt.paid || !dt.paid.done || !dt.settle.hasSales) return null;
-  return dt.settle.transfer - (dt.paid.total||0);
-}
-
+/* 振込・差額は法人（委託先）単位で管理する。店舗単体の額とは比較できないため、
+ * 差額の判定・表示は renderCorp（法人別タブ）でのみ行う。ここでは状態表示のみ。 */
 function statusOf(st){
   var dt=st.detail;
-  if (dt.paid && dt.paid.done){
-    var diff=paidDiffFor(st);
-    var diffLabel = (diff!=null && diff!==0) ? '　⚠差額'+yen(diff) : '';
-    return {cls:'paid', label:'💰 振込済み '+(dt.paid.date||'')+diffLabel};
-  }
+  if (dt.paid && dt.paid.done) return {cls:'paid', label:'💰 振込済み '+(dt.paid.date||'')};
   if (dt.issuedThis) return {cls:'good', label:'✅ 発行済み'};
   if (dt.count>0)    return {cls:'warn', label:'🟡 入力中 '+dt.count+'件'};
   return {cls:'bad', label:'❌ 未入力'};
@@ -863,19 +861,13 @@ function renderCards(){
         ? '<div class="lockline">🔒 振込済みのため編集ロック中（変更にはマスターアカウントが必要です）</div>'
         : '<div class="lockline master">🔓 振込済み（マスター権限のため編集できます）</div>';
     }
-    // 振込済みチェックの解除はマスターのみ（本部はチェックを入れることは可能）
-    var paidCbDisabled = (dt.paid&&dt.paid.done&&!isMaster()) ? ' disabled title="解除にはマスターアカウントが必要です"' : '';
-    var paidDiff = paidDiffFor(st);
-    var paidExtra = '';
+    // 振込済み・振込金額の登録は法人（委託先）単位でまとめて行う（「法人別・振込」タブ参照）。ここは状態表示のみ。
+    var paidHtml = '';
     if (dt.paid && dt.paid.done){
-      paidExtra += '<span class="paid-total">振込済み累計 '+yen(dt.paid.total||0)+'</span>';
-      if (paidDiff!=null && paidDiff!==0){
-        paidExtra += '<span class="paid-diff">⚠ 精算金額との差額 '+yen(paidDiff)+'</span>';
-      }
+      paidHtml = '<div class="paidline">💰 振込済み（'+esc(dt.paid.date)+' '+esc(dt.paid.by)+'）</div>';
+    } else if (honbu){
+      paidHtml = '<div class="paidline muted">振込済みの登録は「🏢 法人別・振込」タブでまとめて行います</div>';
     }
-    var paidHtml = honbu
-      ? '<label class="paidline"><input type="checkbox" '+(dt.paid&&dt.paid.done?'checked':'')+paidCbDisabled+' onchange="togglePaid('+idx+',this)"> 振込済みにする'+(dt.paid&&dt.paid.done?'（'+esc(dt.paid.date)+' '+esc(dt.paid.by)+'）':'')+'</label>'+paidExtra
-      : (dt.paid&&dt.paid.done?'<div class="paidline">💰 振込済み（'+esc(dt.paid.date)+'）</div>'+paidExtra:'');
     var actions='';
     if(honbu){
       actions=(locked
@@ -921,6 +913,8 @@ function salesCheckHtml(sc){
 }
 
 /* ---- 法人別 ---- */
+/* 振込は法人（委託先）単位でまとめて行われる実態に合わせ、振込済みチェック・振込金額の入力・
+ * 差額表示はすべてこの法人別カード側で行う（店舗カード側は状態表示のみ）。 */
 function renderCorp(){
   var d=state.data, honbu=isHonbu();
   var groups={}, order=[];
@@ -937,56 +931,77 @@ function renderCorp(){
       var st=d.stores[i], dt=st.detail, se=dt.settle;
       if(se.hasSales) total+=se.transfer; else undet++;
       var s=statusOf(st);
-      var paidCell = honbu
-        ? '<input type="checkbox" '+(dt.paid&&dt.paid.done?'checked':'')+' onchange="togglePaid('+i+',this)" style="width:16px;height:16px;accent-color:var(--paid)">'
-        : (dt.paid&&dt.paid.done?'💰':'－');
       return '<tr><td>'+esc(st.name)+'</td>'
         +'<td class="num">'+(se.hasSales?yen(se.transfer):'<span class="muted">未確定</span>')+'</td>'
         +(honbu?'<td class="num muted">'+(se.hasSales?yen(se.ns):'－')+'</td>':'')
         +'<td><span class="st-tag '+s.cls+'">'+s.label+'</span></td>'
-        +'<td style="text-align:center">'+paidCell+'</td>'
         +'<td>'+(dt.sent?'📨 '+esc(dt.sent.at):'－')+'</td></tr>';
     }).join('');
+    // 同じ法人配下の店舗は全員同じ振込状態を共有している（バックエンドが法人単位で記録するため）
+    var paid = d.stores[idxs[0]].detail.paid;
+    var paidDone = !!(paid && paid.done);
+    var paidTotal = (paid && paid.total) || 0;
+    var diff = paidDone ? (total - paidTotal) : null;
     var acctHtml = corp && corp.account
       ? '<div class="account">🏦 振込先: '+esc(corp.account)+(corp.note?'　<span class="muted">'+esc(corp.note)+'</span>':'')+'</div>'
       : (honbu?'<div class="account missing">🏦 振込先口座が未登録です → 「設定」タブで登録してください</div>':'');
+    var cbDisabled = (paidDone && !isMaster()) ? ' disabled title="解除にはマスターアカウントが必要です"' : '';
+    var payHtml;
+    if (honbu){
+      payHtml = '<label class="cpaid"><input type="checkbox" '+(paidDone?'checked':'')+cbDisabled+' onchange="toggleCorpPaid('+idxs[0]+',this)"> <b>振込済みにする（法人単位）</b>'
+        + (paidDone?'（'+esc(paid.date)+' '+esc(paid.by)+'　振込済み累計 '+yen(paidTotal)+'）':'') + '</label>'
+        + (paidDone ? (diff!==0
+            ? '<div class="cpaid"><span class="diff">⚠ 精算金額合計との差額 '+yen(diff)+'</span></div>'
+            : '<div class="cpaid"><span class="ok">✅ 差額なし（精算金額合計と一致）</span></div>') : '');
+    } else {
+      payHtml = paidDone
+        ? '<div class="cpaid">💰 振込済み（'+esc(paid.date)+'）'+(diff!==0?'　<span class="diff">⚠ 差額 '+yen(diff)+'</span>':'')+'</div>'
+        : '';
+    }
     return '<div class="corp">'
       +'<div class="chead"><span class="cname">'+esc(client)+'</span><span class="muted">'+idxs.length+'店舗</span>'
       +'<div class="csum"><div class="lab">'+esc(d.monthLabel)+'分 合計振込金額（税込）'+(undet?'　※未確定'+undet+'店舗を除く':'')+'</div><div class="val">'+yen(total)+'</div></div></div>'
       + acctHtml
-      +'<div class="matrix-scroll"><table class="corpt"><tr><th>店舗</th><th style="text-align:right">振込金額（税込）</th>'+(honbu?'<th style="text-align:right">N-style収益</th>':'')+'<th>状態</th><th style="text-align:center">振込済み</th><th>送信</th></tr>'+rows+'</table></div>'
+      + payHtml
+      +'<div class="matrix-scroll"><table class="corpt"><tr><th>店舗</th><th style="text-align:right">振込金額（税込）</th>'+(honbu?'<th style="text-align:right">N-style収益</th>':'')+'<th>状態</th><th>送信</th></tr>'+rows+'</table></div>'
       +'</div>';
   }).join('');
 }
 
-function togglePaid(storeIdx, cb){
-  var st=state.data.stores[storeIdx];
-  var done=cb.checked;
+/* anyIdx: この法人配下のどれか1店舗のインデックス（法人名の特定に使うだけ） */
+function toggleCorpPaid(anyIdx, cb){
+  var d=state.data;
+  var client = d.stores[anyIdx].client || '（委託先未設定）';
+  var idxs = d.stores.map(function(s,i){return i;}).filter(function(i){ return (d.stores[i].client||'（委託先未設定）')===client; });
+  var done = cb.checked;
   if(!done){
-    // 解除は確認のみ
-    if(!confirm(st.name+' の振込済みを解除しますか？')){ cb.checked=true; return; }
-    setPaidCall(st, false, false, null, cb);
+    // 解除は確認のみ（配下の全店舗のロックが外れる）
+    if(!confirm(client+' の振込済みを解除しますか？（配下の'+idxs.length+'店舗すべてが対象です）')){ cb.checked=true; return; }
+    setPaidCall(client, false, false, null, cb);
     return;
   }
-  // 振込済みにする場合: 振込金額を入力してから、メール送信の有無を選択
-  var se=st.detail.settle;
-  var prevTotal=(st.detail.paid&&st.detail.paid.total)||0;
-  var transfer = se.hasSales ? se.transfer : null;
-  var suggested = transfer!=null ? (transfer-prevTotal) : 0;
+  // 振込済みにする場合: 法人合計の振込金額を入力してから、メール送信の有無を選択
+  var total=0, undet=0;
+  idxs.forEach(function(i){ var se=d.stores[i].detail.settle; if(se.hasSales) total+=se.transfer; else undet++; });
+  var prevTotal=(d.stores[anyIdx].detail.paid&&d.stores[anyIdx].detail.paid.total)||0;
+  var suggested = total-prevTotal;
+  var storeList = idxs.map(function(i){ return d.stores[i].name; }).join('、');
   var histLine = prevTotal
-    ? '<p class="muted">これまでの振込済み累計：'+yen(prevTotal)+(transfer!=null?'　／　今回の精算金額（計算値）：'+yen(transfer):'')+'</p>'
+    ? '<p class="muted">これまでの振込済み累計：'+yen(prevTotal)+'　／　今回の精算金額合計（計算値）：'+yen(total)+'</p>'
     : '';
-  var body='<p>'+esc(st.name)+'　'+esc(state.data.monthLabel)+'分を<b>振込済み</b>にします。</p>'
+  state._pendingPaidClient = client;
+  var body='<p><b>'+esc(client)+'</b>　'+esc(d.monthLabel)+'分（'+esc(storeList)+'）を<b>振込済み</b>にします。</p>'
     + histLine
-    + '<label style="display:block;margin-top:10px">今回の振込金額（税込）<br>'
-    + '<input type="number" id="paid-amount-input" value="'+suggested+'" style="width:100%;margin-top:4px;padding:8px;font-size:16px;box-sizing:border-box" oninput="updatePaidDiffPreview('+(transfer==null?'null':transfer)+','+prevTotal+')"></label>'
+    + (undet?'<p class="muted">※売上未入力の'+undet+'店舗は合計から除いています</p>':'')
+    + '<label style="display:block;margin-top:10px">今回の振込金額（税込・法人合計）<br>'
+    + '<input type="number" id="paid-amount-input" value="'+suggested+'" style="width:100%;margin-top:4px;padding:8px;font-size:16px;box-sizing:border-box" oninput="updatePaidDiffPreview('+total+','+prevTotal+')"></label>'
     + '<p id="paid-diff-preview" class="muted" style="margin-top:6px"></p>'
-    + '<p class="muted" style="margin-top:8px">「メールも送信」を選ぶと、メール設定シートの宛先に振込完了のお知らせメールを送ります（今回入力した振込金額入り）。</p>';
+    + '<p class="muted" style="margin-top:8px">「メールも送信」を選ぶと、配下の各店舗のメール設定宛先に、それぞれの精算金額での振込完了のお知らせメールを送ります。</p>';
   openModal('💰 振込済みにする', body,
-    '<button class="btn primary" onclick="confirmPaidFromModal('+storeIdx+',true)">✉️ 振込済みにしてメールも送信</button>'
-    +'<button class="btn" onclick="confirmPaidFromModal('+storeIdx+',false)">メールなしで振込済みに</button>'
+    '<button class="btn primary" onclick="confirmCorpPaidFromModal(true)">✉️ 振込済みにしてメールも送信</button>'
+    +'<button class="btn" onclick="confirmCorpPaidFromModal(false)">メールなしで振込済みに</button>'
     +'<button class="btn" onclick="closeModal();loadDashboard(state.month)">やめる</button>');
-  updatePaidDiffPreview(transfer, prevTotal);
+  updatePaidDiffPreview(total, prevTotal);
 }
 function updatePaidDiffPreview(transfer, prevTotal){
   var el=document.getElementById('paid-diff-preview');
@@ -996,24 +1011,24 @@ function updatePaidDiffPreview(transfer, prevTotal){
   var amt=Number(inp.value);
   if(inp.value===''||!isFinite(amt)){ el.textContent=''; return; }
   var diff = transfer - (prevTotal+amt);
-  if(diff===0) el.innerHTML='<span style="color:var(--good)">✅ 差額なし（精算金額と一致します）</span>';
-  else el.innerHTML='<span style="color:var(--bad);font-weight:700">⚠ 差額 '+yen(diff)+'（精算金額 '+yen(transfer)+' − 振込累計 '+yen(prevTotal+amt)+'）</span>';
+  if(diff===0) el.innerHTML='<span style="color:var(--good)">✅ 差額なし（精算金額合計と一致します）</span>';
+  else el.innerHTML='<span style="color:var(--bad);font-weight:700">⚠ 差額 '+yen(diff)+'（精算金額合計 '+yen(transfer)+' − 振込累計 '+yen(prevTotal+amt)+'）</span>';
 }
-function confirmPaidFromModal(storeIdx, sendMail){
-  var st=state.data.stores[storeIdx];
+function confirmCorpPaidFromModal(sendMail){
+  var client = state._pendingPaidClient;
   var inp=document.getElementById('paid-amount-input');
   var amt=inp?Number(inp.value):NaN;
   if(!inp || inp.value===''||!isFinite(amt)){ toast('振込金額を入力してください'); return; }
   closeModal();
-  setPaidCall(st, true, sendMail, amt, null);
+  setPaidCall(client, true, sendMail, amt, null);
 }
-function setPaidCall(st, done, sendMail, amount, cb){
+function setPaidCall(name, done, sendMail, amount, cb){
   loading(true, done?(sendMail?'振込済み登録＆メール送信中…':'振込済みに登録中…'):'解除中…');
-  apiAuth('sd_setPaid', st.name, state.month, done, !!sendMail, done?amount:null).then(function(res){
+  apiAuth('sd_setPaid', name, state.month, done, !!sendMail, done?amount:null).then(function(res){
     loading(false);
-    if(done && res.mailed) toast('💰 振込済みにして、完了メールを送信しました（→ '+res.to+'）');
-    else if(done) toast('💰 '+st.name+' '+mLabel(res.month)+'分を振込済みにしました（振込金額 '+yen(res.amount)+'）');
-    else toast('↩ '+st.name+' の振込済みを解除しました');
+    if(done && res.mailed) toast('💰 振込済みにして、完了メール（'+res.mailedStores.length+'件）を送信しました');
+    else if(done) toast('💰 '+name+' '+mLabel(res.month)+'分を振込済みにしました（振込金額 '+yen(res.amount)+'）');
+    else toast('↩ '+name+' の振込済みを解除しました');
     loadDashboard(state.month,true);
   }).catch(function(e){
     loading(false);
@@ -1035,9 +1050,7 @@ function renderMatrix(){
       var issued = st.issued[mk]===true || c.sent;
       var cls = mk===d.month?' class="sel"':'';
       var inner;
-      var paidDiff = (c.paid && c.transfer!=null) ? (c.transfer - (c.paidTotal||0)) : 0;
-      if (c.paid && paidDiff!==0) inner='<span class="cell-paiddiff" title="差額 '+yen(paidDiff)+'（精算 '+yen(c.transfer)+' − 振込 '+yen(c.paidTotal||0)+'）">💰⚠ '+c.count+'</span>';
-      else if (c.paid) inner='<span class="cell-paid">💰 '+c.count+'</span>';
+      if (c.paid) inner='<span class="cell-paid">💰 '+c.count+'</span>';
       else if (issued) inner='<span class="cell-issued">✓ '+c.count+'</span>';
       else if (c.count>0) inner='<span class="cell-some">'+c.count+'</span>';
       else inner='<span class="cell-none">－</span>';
