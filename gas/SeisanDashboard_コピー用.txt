@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.9-cwremind';
+var SD_VERSION = 'v5.10-cwtest-perf';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -46,7 +46,7 @@ var SD_API_WHITELIST = [
   'sd_pdfPreview', 'sd_issueAndSend', 'sd_cashPreview', 'sd_cashApply',
   'sd_prepareMonth', 'sd_setupAutoPrep', 'sd_uploadAttachment', 'sd_listAttachments',
   'sd_getPdfB64', 'sd_updateCheckSheet', 'sd_bulkAdd', 'sd_getSettings',
-  'sd_saveAccount', 'sd_saveCorp'
+  'sd_saveAccount', 'sd_saveCorp', 'sd_testChatwork'
 ];
 
 function sd_apiFnMap_() {
@@ -58,7 +58,7 @@ function sd_apiFnMap_() {
     sd_uploadAttachment: sd_uploadAttachment, sd_listAttachments: sd_listAttachments,
     sd_getPdfB64: sd_getPdfB64, sd_updateCheckSheet: sd_updateCheckSheet,
     sd_bulkAdd: sd_bulkAdd, sd_getSettings: sd_getSettings,
-    sd_saveAccount: sd_saveAccount, sd_saveCorp: sd_saveCorp
+    sd_saveAccount: sd_saveAccount, sd_saveCorp: sd_saveCorp, sd_testChatwork: sd_testChatwork
   };
 }
 
@@ -155,7 +155,18 @@ function sd_colLetterToNum_(letter) {
 
 /* ---------- シート構造の自動検出（v1と同じ） ---------- */
 
+/* 全シートを毎回スキャンするsd_detectRaw_は重い（実測で秒単位）。
+ * 店舗構成が変わるのは稀なので10分キャッシュする（店舗追加直後は最大10分反映が遅れる）。 */
 function sd_detect_() {
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get('sd_detect_v1');
+  if (hit) { try { return JSON.parse(hit); } catch (e) { /* 壊れていたら作り直す */ } }
+  var res = sd_detectRaw_();
+  try { cache.put('sd_detect_v1', JSON.stringify(res), 600); } catch (e) { /* 100KB超なら諦めてキャッシュしない */ }
+  return res;
+}
+
+function sd_detectRaw_() {
   var ss = SpreadsheetApp.getActive();
   var res = { master: null, dbs: [], statusSheet: null, mailSheet: null, sendSheet: null };
   var own = [SD_CONFIG_SHEET, SD_EXT_SHEET, SD_AUTH_SHEET, SD_RECUR_SHEET, SD_LOG_SHEET, SD_CHECK_SHEET];
@@ -1953,6 +1964,13 @@ function sd_notifyChatwork_(message) {
   var code = res.getResponseCode();
   if (code === 200) return { sent: true };
   return { sent: false, reason: 'ChatWork送信失敗: HTTP' + code + ' ' + res.getContentText() };
+}
+
+/* ⚙️設定タブの「ChatWorkテスト送信」ボタンから呼ばれる。設定が正しいかその場で確認できるようにする。 */
+function sd_testChatwork(token) {
+  sd_auth_(token, true);
+  var result = sd_notifyChatwork_('[info][title]🔔 ChatWork連携テスト[/title]この通知が届いていれば、精算ダッシュボードからのChatWork連携設定は正常です。[/info]');
+  return { ok: result.sent, reason: result.reason };
 }
 
 /* 毎日9時に実行（トリガーはsd_setupAutoPrepで作成）。

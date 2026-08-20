@@ -334,6 +334,14 @@
       <div class="matrix-scroll"><table class="corpt" id="store-settings-table"></table></div>
       <p class="muted" style="margin-top:6px">店舗の追加・ロイヤリティ率・家賃などの固定経費は、スプレッドシートの「店舗設定マスター」で編集します。<a class="plain" id="master-link" href="#" target="_blank" rel="noopener">店舗設定マスターを開く ↗</a></p>
     </div>
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <h2 style="margin:0">🔔 ChatWork連携（振込期限リマインド）</h2>
+        <span style="flex:1"></span>
+        <button class="btn primary sm" onclick="testChatwork()">📨 テスト送信</button>
+      </div>
+      <p class="muted" style="margin-top:6px">「設定_外部連携」シートの「ChatWork APIトークン」「ChatWorkルームID（振込リマインド用）」を設定した後、ここでテスト送信して届くか確認できます。</p>
+    </div>
   </div>
 
   <!-- 入力（本部のみ） -->
@@ -457,6 +465,7 @@ sd_login:function(id,pw){ROLE=(id.indexOf('master')>-1)?'マスター':((id.inde
       sd_bulkAdd:function(t,p){var ms=[],k=p.fromMonth;while(k<=p.toMonth){ms.push(k);k=addM(k,1);}return ({ok:true,months:ms,item:p.item,amount:p.amount,store:p.store});},
       sd_getSettings:function(t){return ({accounts:[{id:'honbu',pw:'x',name:'本部',role:'本部',stores:'全店',enabled:true}],corps:[{client:'株式会社FAM Dining',account:'三井住友 渋谷 普通 1234567',note:''}],stores:[{name:'秋葉原 肉寿司',client:'株式会社FAM Dining',rate:'7.0%',hasDb:true}],masterSheetUrl:'https://example.com'});},
       sd_saveAccount:function(t,a){return ({ok:true,id:a.id,updated:true});},
+      sd_testChatwork:function(t){return ({ok:true});},
       sd_saveCorp:function(t,c){return ({ok:true,client:c.client,updated:true});},
       sd_updateCheckSheet:function(t,mk){return ('更新');},
       sd_cashPreview:function(t,mk){return ({month:mk,monthLabel:'2026年6月',items:[]});},
@@ -1444,6 +1453,14 @@ function prepareMonth(){
 function setupAutoPrep(){
   apiAuth('sd_setupAutoPrep').then(function(res){ toast('🕘 '+res.message); })
     .catch(function(e){ toast('エラー: '+(e.message||e)); });
+}
+function testChatwork(){
+  loading(true,'ChatWorkへテスト送信中…');
+  apiAuth('sd_testChatwork').then(function(res){
+    loading(false);
+    if(res.ok) toast('✅ ChatWorkに送信しました。届いているか確認してください');
+    else toast('❌ '+(res.reason||'送信に失敗しました'), 8000);
+  }).catch(function(e){ loading(false); toast('エラー: '+(e.message||e)); });
 }
 
 /* ===== 添付 ===== */
