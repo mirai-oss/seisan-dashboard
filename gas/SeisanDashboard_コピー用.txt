@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.6-sso';
+var SD_VERSION = 'v5.7-paidamt';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -358,45 +358,59 @@ function sd_paidSheet_() {
   var sh = ss.getSheetByName(SD_PAID_SHEET);
   if (!sh) {
     sh = ss.insertSheet(SD_PAID_SHEET);
-    sh.getRange(1, 1, 1, 5).setValues([['店舗名', '対象月', '振込済み', '日付', '記録者']]);
+    sh.getRange(1, 1, 1, 6).setValues([['店舗名', '対象月', '振込済み', '日付', '記録者', '振込金額']]);
     sh.setFrozenRows(1);
+  } else if (String(sh.getRange(1, 6).getValue()) !== '振込金額') {
+    sh.getRange(1, 6).setValue('振込金額'); // 旧シート（5列）を6列に拡張
   }
   return sh;
 }
 
+/* 振込済みシートは「1店舗×1月=1行の状態」ではなく「操作イベントの履歴」として積み上げる。
+ * 振込済みにする操作のたびに1行追加され、振込金額はそのイベントごとの入力額。
+ * 解除操作には金額が付かず、累計（total）はリセットしない
+ * （精算修正→再振込のときに差額分だけ追加入力できるようにするため）。 */
 function sd_paidMap_() {
   var sh = sd_paidSheet_();
   var lastR = sh.getLastRow();
   var out = {};
   if (lastR < 2) return out;
-  sh.getRange(2, 1, lastR - 1, 5).getDisplayValues().forEach(function (r) {
+  sh.getRange(2, 1, lastR - 1, 6).getDisplayValues().forEach(function (r) {
     var store = sd_norm_(r[0]), mk = String(r[1]).trim();
     if (!store || !mk) return;
     out[store] = out[store] || {};
-    out[store][mk] = { done: sd_norm_(r[2]).toUpperCase() === 'TRUE' || r[2] === '✅', date: r[3], by: r[4] };
+    var cur = out[store][mk] || { done: false, date: '', by: '', total: 0 };
+    var isPaidEvent = sd_norm_(r[2]).toUpperCase() === 'TRUE' || r[2] === '✅';
+    cur.done = isPaidEvent; // 行は時系列順に並ぶため、最後に読んだ行が現在の状態
+    cur.date = r[3];
+    cur.by = r[4];
+    if (isPaidEvent) {
+      var amt = Number(String(r[5]).replace(/[^0-9.\-]/g, ''));
+      if (amt) cur.total += amt;
+    }
+    out[store][mk] = cur;
   });
   return out;
 }
 
-function sd_setPaid(token, store, monthKey, done, sendMail) {
+function sd_setPaid(token, store, monthKey, done, sendMail, amount) {
   var user = sd_auth_(token, true);
   // 振込済み→未振込に戻す（ロック解除）操作はマスターのみ許可。振込済みにする操作（ロック開始）は本部でも可。
   if (!done && sd_isLocked_(store, monthKey)) sd_requireMaster_(user);
-  var sh = sd_paidSheet_();
-  var lastR = sh.getLastRow();
-  var row = 0;
-  if (lastR > 1) {
-    var vals = sh.getRange(2, 1, lastR - 1, 2).getDisplayValues();
-    for (var i = 0; i < vals.length; i++) {
-      if (sd_norm_(vals[i][0]) === sd_norm_(store) && String(vals[i][1]).trim() === monthKey) { row = i + 2; break; }
-    }
-  }
-  var rec = [store, monthKey, done ? 'TRUE' : 'FALSE',
-    done ? Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd') : '', user.name];
-  if (row) sh.getRange(row, 1, 1, 5).setValues([rec]);
-  else sh.appendRow(rec);
 
-  var result = { ok: true, store: store, month: monthKey, done: !!done, mailed: false };
+  var amt = 0;
+  if (done) {
+    amt = Number(amount);
+    if (!isFinite(amt)) throw new Error('振込金額を入力してください');
+  }
+
+  var sh = sd_paidSheet_();
+  var rec = [store, monthKey, done ? 'TRUE' : 'FALSE',
+    done ? Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd') : '', user.name,
+    done ? amt : ''];
+  sh.appendRow(rec); // 履歴として毎回追加（上書きしない）
+
+  var result = { ok: true, store: store, month: monthKey, done: !!done, mailed: false, amount: done ? amt : null };
   if (done && sendMail) {
     var det = sd_detect_();
     var ext = sd_extConfig_();
@@ -404,15 +418,7 @@ function sd_setPaid(token, store, monthKey, done, sendMail) {
     if (!ms || !ms.to) throw new Error('メール設定シートに「' + store + '」の宛先(To)がありません（振込済みには登録済み）');
     var d = sd_monthKeyToDate_(monthKey);
     var mLabel = (d.getMonth() + 1) + '月';
-    // 振込金額を計算して本文に載せる
-    var cfg = sd_config_(sd_masterStores_(det), det);
-    var st = null;
-    cfg.forEach(function (s) { if (s.name === store) st = s; });
-    var amountLine = '';
-    if (st && st.db) {
-      var settle = sd_settle_(sd_readRows_(st.db), monthKey, st.rate, st.fixed);
-      if (settle.hasSales) amountLine = '■振込金額（税込）：' + sd_yen_(settle.transfer) + '\n';
-    }
+    var amountLine = '■振込金額（税込）：' + sd_yen_(amt) + '\n'; // 実際に入力された振込金額を使う
     var sender = ext['メール送信者名'] || '株式会社N-Style';
     var subject = '【お知らせ】' + mLabel + '分業務委託料 お振込完了のご連絡（' + store + '）';
     var body = 'ご担当者様\n\nいつも大変お世話になっております。\n' + sender + 'です。\n\n'
@@ -958,7 +964,8 @@ function sd_getDashboard(token, monthKey) {
         count: s.count, cost: s.varCost + s.royF,
         sales: s.sales, transfer: s.hasSales ? s.transfer : null,
         ns: s.hasSales ? s.ns : null,
-        sent: !!sent, paid: !!(paidByMonth[mk] && paidByMonth[mk].done)
+        sent: !!sent, paid: !!(paidByMonth[mk] && paidByMonth[mk].done),
+        paidTotal: (paidByMonth[mk] && paidByMonth[mk].total) || 0 // 振込済み累計額（差額アラート用）
       };
     });
     var chk = st.db ? sd_missing_(byMonth, monthKey, st.required) : { missing: [], catWarn: ['DBシート未検出'] };

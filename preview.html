@@ -120,6 +120,10 @@
   table.matrix .cell-some{color:var(--warn);font-weight:700}
   table.matrix .cell-none{color:var(--ink3)}
   table.matrix .cell-paid{color:var(--paid);font-weight:700}
+  table.matrix .cell-paiddiff{color:var(--bad);font-weight:700}
+
+  .paidline .paid-diff{display:block;margin-top:4px;font-size:12px;color:var(--bad);font-weight:700}
+  .paidline .paid-total{display:block;margin-top:2px;font-size:12px;color:var(--ink3)}
 
   .banner{border-radius:var(--radius);padding:14px 16px;margin-bottom:14px;background:var(--accent-soft);border:1px solid #c9dbfb;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
   .banner .big{font-size:18px;font-weight:800;color:var(--accent)}
@@ -407,7 +411,7 @@
     var matrix={},issued={};
     MONTHS.forEach(function(mk){matrix[mk]={count:0,sales:null,transfer:null,ns:null,sent:false,paid:false};issued[mk]=ISSUED.indexOf(mk)>-1;});
     Object.keys(hist).forEach(function(mk){var h=hist[mk];var s2=settle(h.s,Math.round(h.s*0.22),440000,rateP,fixed.total);
-      matrix[mk]={count:h.c||10,sales:h.s,transfer:s2.transfer,ns:s2.ns,sent:issued[mk],paid:!!h.p};});
+      matrix[mk]={count:h.c||10,sales:h.s,transfer:s2.transfer,ns:s2.ns,sent:issued[mk],paid:!!h.p,paidTotal:h.p?s2.transfer:0};});
     matrix[TARGET]={count:rows.length,sales:se.sales,transfer:se.hasSales?se.transfer:null,ns:se.hasSales?se.ns:null,sent:!!sent,paid:!!PAID[name]};
     return {name:name,client:client,rate:rateP.toFixed(1)+'%',fixed:fixed,dbSheet:name,hasDb:true,matrix:matrix,issued:issued,
       detail:{rows:rows,sales:se.sales,cost:se.costTotal,count:rows.length,settle:se,missing:missing,catWarn:catWarn,
@@ -425,7 +429,11 @@
     ],['ガス料金'],[],{'2026-03':{s:12511491},'2026-04':{s:10491876,p:1},'2026-05':{s:11220450}},null)
   ];}
   var ROLE='本部',NAME='本部';
-  function dash(){var st=stores();if(st[0]){st[0].detail.salesCheck={source:st[0].detail.sales,entered:st[0].detail.sales,diff:0,salesName:st[0].name};st[0].detail.paid={done:true,date:'2026-07-19',by:'本部'};st[0].detail.locked=true;}if(st[1]){st[1].detail.salesCheck={source:st[1].detail.sales+120000,entered:st[1].detail.sales,diff:-120000,salesName:st[1].name};}return {ver:'v5.4（プレビュー）',user:{name:NAME,role:ROLE},month:TARGET,monthLabel:'2026年6月',
+  function dash(){var st=stores();if(st[0]){st[0].detail.salesCheck={source:st[0].detail.sales,entered:st[0].detail.sales,diff:0,salesName:st[0].name};
+      var akibaTotal=st[0].detail.settle.transfer-30000; // プレビュー確認用にわざと差額（3万円）を作る
+      st[0].detail.paid={done:true,date:'2026-07-19',by:'本部',total:akibaTotal};st[0].detail.locked=true;
+      st[0].matrix[TARGET].paid=true;st[0].matrix[TARGET].paidTotal=akibaTotal;
+    }if(st[1]){st[1].detail.salesCheck={source:st[1].detail.sales+120000,entered:st[1].detail.sales,diff:-120000,salesName:st[1].name};}return {ver:'v5.4（プレビュー）',user:{name:NAME,role:ROLE},month:TARGET,monthLabel:'2026年6月',
     months:MONTHS,stores:ROLE==='本部'?st:st.slice(0,1),
     corps:{'株式会社FAMDining':{account:'三井住友 渋谷 普通 1234567',note:''},'株式会社MostFun':{account:'',note:''}},
     kubunOptions:['売上','変動費','固定ロイヤリティ','変動ロイヤリティ','固定調整'],taxOptions:['10%','8%','対象外'],
@@ -436,7 +444,7 @@ sd_login:function(id,pw){ROLE=(id.indexOf('master')>-1)?'マスター':((id.inde
       sd_getDashboard:function(t,mk){var d=dash(); d._ms={auth:20,detectSheets:250,issuedSent:180,paidCorpsPayMap:900,'店舗:秋葉原 肉寿司':4200,'店舗:川崎　じんべぇ':2100,'storesLoop（2店舗）':300,total:7950}; return d;},
       sd_updateRow:function(t,p){EDITED[p.store+'|'+p.row]='7/18 '+NAME;return ({ok:true,row:p.row,item:p.item,_ms:{auth:20,lockWait:5,detectSheets:300,readRow:400,write:900,cacheClear:10,total:1635}});},
       sd_deleteRow:function(t,p){return ({ok:true,item:p.orig.item,amount:p.orig.amount,_ms:{auth:15,lockWait:5,detectSheets:280,readRow:380,deleteRow:1200,log:150,total:2030}});},
-      sd_setPaid:function(t,s,mk,dn,sm){PAID[s]=dn?{done:true,date:'2026-07-18',by:NAME}:null;return ({ok:true,store:s,month:mk,done:dn,mailed:!!(dn&&sm),to:'sample@example.com'});},
+      sd_setPaid:function(t,s,mk,dn,sm,amt){var prevTotal=(PAID[s]&&PAID[s].total)||0;PAID[s]=dn?{done:true,date:'2026-07-18',by:NAME,total:prevTotal+(Number(amt)||0)}:{done:false,date:PAID[s]?PAID[s].date:'',by:NAME,total:prevTotal};return ({ok:true,store:s,month:mk,done:dn,mailed:!!(dn&&sm),to:'sample@example.com',amount:dn?Number(amt):null});},
       sd_addRows:function(t,p){return ({ok:true,added:p.rows.length,sheet:'（プレビュー）',month:p.month});},
       sd_uploadAttachment:function(t,p){return ({ok:true,name:p.kind+'_2026.06_'+p.store+'.pdf',url:'#',folder:'2026年6月／'+p.store});},
       sd_bulkAdd:function(t,p){var ms=[],k=p.fromMonth;while(k<=p.toMonth){ms.push(k);k=addM(k,1);}return ({ok:true,months:ms,item:p.item,amount:p.amount,store:p.store});},
@@ -784,9 +792,20 @@ function render(){
   if(honbu) renderInputView();
 }
 
+/* 振込予定額（精算金額）と実際の振込済み累計との差額。未振込・売上未確定なら null */
+function paidDiffFor(st){
+  var dt=st.detail;
+  if (!dt.paid || !dt.paid.done || !dt.settle.hasSales) return null;
+  return dt.settle.transfer - (dt.paid.total||0);
+}
+
 function statusOf(st){
   var dt=st.detail;
-  if (dt.paid && dt.paid.done) return {cls:'paid', label:'💰 振込済み '+(dt.paid.date||'')};
+  if (dt.paid && dt.paid.done){
+    var diff=paidDiffFor(st);
+    var diffLabel = (diff!=null && diff!==0) ? '　⚠差額'+yen(diff) : '';
+    return {cls:'paid', label:'💰 振込済み '+(dt.paid.date||'')+diffLabel};
+  }
   if (dt.issuedThis) return {cls:'good', label:'✅ 発行済み'};
   if (dt.count>0)    return {cls:'warn', label:'🟡 入力中 '+dt.count+'件'};
   return {cls:'bad', label:'❌ 未入力'};
@@ -846,9 +865,17 @@ function renderCards(){
     }
     // 振込済みチェックの解除はマスターのみ（本部はチェックを入れることは可能）
     var paidCbDisabled = (dt.paid&&dt.paid.done&&!isMaster()) ? ' disabled title="解除にはマスターアカウントが必要です"' : '';
+    var paidDiff = paidDiffFor(st);
+    var paidExtra = '';
+    if (dt.paid && dt.paid.done){
+      paidExtra += '<span class="paid-total">振込済み累計 '+yen(dt.paid.total||0)+'</span>';
+      if (paidDiff!=null && paidDiff!==0){
+        paidExtra += '<span class="paid-diff">⚠ 精算金額との差額 '+yen(paidDiff)+'</span>';
+      }
+    }
     var paidHtml = honbu
-      ? '<label class="paidline"><input type="checkbox" '+(dt.paid&&dt.paid.done?'checked':'')+paidCbDisabled+' onchange="togglePaid('+idx+',this)"> 振込済みにする'+(dt.paid&&dt.paid.done?'（'+esc(dt.paid.date)+' '+esc(dt.paid.by)+'）':'')+'</label>'
-      : (dt.paid&&dt.paid.done?'<div class="paidline">💰 振込済み（'+esc(dt.paid.date)+'）</div>':'');
+      ? '<label class="paidline"><input type="checkbox" '+(dt.paid&&dt.paid.done?'checked':'')+paidCbDisabled+' onchange="togglePaid('+idx+',this)"> 振込済みにする'+(dt.paid&&dt.paid.done?'（'+esc(dt.paid.date)+' '+esc(dt.paid.by)+'）':'')+'</label>'+paidExtra
+      : (dt.paid&&dt.paid.done?'<div class="paidline">💰 振込済み（'+esc(dt.paid.date)+'）</div>'+paidExtra:'');
     var actions='';
     if(honbu){
       actions=(locked
@@ -938,23 +965,54 @@ function togglePaid(storeIdx, cb){
   if(!done){
     // 解除は確認のみ
     if(!confirm(st.name+' の振込済みを解除しますか？')){ cb.checked=true; return; }
-    setPaidCall(st, false, false, cb);
+    setPaidCall(st, false, false, null, cb);
     return;
   }
-  // 振込済みにする場合: メール送信の有無を選択
+  // 振込済みにする場合: 振込金額を入力してから、メール送信の有無を選択
+  var se=st.detail.settle;
+  var prevTotal=(st.detail.paid&&st.detail.paid.total)||0;
+  var transfer = se.hasSales ? se.transfer : null;
+  var suggested = transfer!=null ? (transfer-prevTotal) : 0;
+  var histLine = prevTotal
+    ? '<p class="muted">これまでの振込済み累計：'+yen(prevTotal)+(transfer!=null?'　／　今回の精算金額（計算値）：'+yen(transfer):'')+'</p>'
+    : '';
   var body='<p>'+esc(st.name)+'　'+esc(state.data.monthLabel)+'分を<b>振込済み</b>にします。</p>'
-    +'<p class="muted" style="margin-top:8px">「メールも送信」を選ぶと、メール設定シートの宛先に振込完了のお知らせメールを送ります（振込金額入り）。</p>';
+    + histLine
+    + '<label style="display:block;margin-top:10px">今回の振込金額（税込）<br>'
+    + '<input type="number" id="paid-amount-input" value="'+suggested+'" style="width:100%;margin-top:4px;padding:8px;font-size:16px;box-sizing:border-box" oninput="updatePaidDiffPreview('+(transfer==null?'null':transfer)+','+prevTotal+')"></label>'
+    + '<p id="paid-diff-preview" class="muted" style="margin-top:6px"></p>'
+    + '<p class="muted" style="margin-top:8px">「メールも送信」を選ぶと、メール設定シートの宛先に振込完了のお知らせメールを送ります（今回入力した振込金額入り）。</p>';
   openModal('💰 振込済みにする', body,
-    '<button class="btn primary" onclick="closeModal();setPaidCall(state.data.stores['+storeIdx+'],true,true)">✉️ 振込済みにしてメールも送信</button>'
-    +'<button class="btn" onclick="closeModal();setPaidCall(state.data.stores['+storeIdx+'],true,false)">メールなしで振込済みに</button>'
+    '<button class="btn primary" onclick="confirmPaidFromModal('+storeIdx+',true)">✉️ 振込済みにしてメールも送信</button>'
+    +'<button class="btn" onclick="confirmPaidFromModal('+storeIdx+',false)">メールなしで振込済みに</button>'
     +'<button class="btn" onclick="closeModal();loadDashboard(state.month)">やめる</button>');
+  updatePaidDiffPreview(transfer, prevTotal);
 }
-function setPaidCall(st, done, sendMail, cb){
+function updatePaidDiffPreview(transfer, prevTotal){
+  var el=document.getElementById('paid-diff-preview');
+  var inp=document.getElementById('paid-amount-input');
+  if(!el||!inp) return;
+  if(transfer==null){ el.textContent='※ 売上未入力のため精算金額が未確定です（差額は表示できません）'; return; }
+  var amt=Number(inp.value);
+  if(inp.value===''||!isFinite(amt)){ el.textContent=''; return; }
+  var diff = transfer - (prevTotal+amt);
+  if(diff===0) el.innerHTML='<span style="color:var(--good)">✅ 差額なし（精算金額と一致します）</span>';
+  else el.innerHTML='<span style="color:var(--bad);font-weight:700">⚠ 差額 '+yen(diff)+'（精算金額 '+yen(transfer)+' − 振込累計 '+yen(prevTotal+amt)+'）</span>';
+}
+function confirmPaidFromModal(storeIdx, sendMail){
+  var st=state.data.stores[storeIdx];
+  var inp=document.getElementById('paid-amount-input');
+  var amt=inp?Number(inp.value):NaN;
+  if(!inp || inp.value===''||!isFinite(amt)){ toast('振込金額を入力してください'); return; }
+  closeModal();
+  setPaidCall(st, true, sendMail, amt, null);
+}
+function setPaidCall(st, done, sendMail, amount, cb){
   loading(true, done?(sendMail?'振込済み登録＆メール送信中…':'振込済みに登録中…'):'解除中…');
-  apiAuth('sd_setPaid', st.name, state.month, done, !!sendMail).then(function(res){
+  apiAuth('sd_setPaid', st.name, state.month, done, !!sendMail, done?amount:null).then(function(res){
     loading(false);
     if(done && res.mailed) toast('💰 振込済みにして、完了メールを送信しました（→ '+res.to+'）');
-    else if(done) toast('💰 '+st.name+' '+mLabel(res.month)+'分を振込済みにしました');
+    else if(done) toast('💰 '+st.name+' '+mLabel(res.month)+'分を振込済みにしました（振込金額 '+yen(res.amount)+'）');
     else toast('↩ '+st.name+' の振込済みを解除しました');
     loadDashboard(state.month,true);
   }).catch(function(e){
@@ -977,7 +1035,9 @@ function renderMatrix(){
       var issued = st.issued[mk]===true || c.sent;
       var cls = mk===d.month?' class="sel"':'';
       var inner;
-      if (c.paid) inner='<span class="cell-paid">💰 '+c.count+'</span>';
+      var paidDiff = (c.paid && c.transfer!=null) ? (c.transfer - (c.paidTotal||0)) : 0;
+      if (c.paid && paidDiff!==0) inner='<span class="cell-paiddiff" title="差額 '+yen(paidDiff)+'（精算 '+yen(c.transfer)+' − 振込 '+yen(c.paidTotal||0)+'）">💰⚠ '+c.count+'</span>';
+      else if (c.paid) inner='<span class="cell-paid">💰 '+c.count+'</span>';
       else if (issued) inner='<span class="cell-issued">✓ '+c.count+'</span>';
       else if (c.count>0) inner='<span class="cell-some">'+c.count+'</span>';
       else inner='<span class="cell-none">－</span>';
