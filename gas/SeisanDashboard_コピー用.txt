@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.8-corppay';
+var SD_VERSION = 'v5.9-cwremind';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -616,7 +616,9 @@ function sd_extConfig_() {
     ['リマインド送信先', ''],
     ['ダッシュボードURL', ''],
     ['Lark完了報告Webhook', ''],
-    ['Larkキーワード', '']
+    ['Larkキーワード', ''],
+    ['ChatWork APIトークン', ''],
+    ['ChatWorkルームID（振込リマインド用）', '']
   ];
   if (!sh) {
     sh = ss.insertSheet(SD_EXT_SHEET);
@@ -1890,13 +1892,12 @@ function sd_recurRows_() {
 /* 自動処理のセットアップ:
  *  - 毎月1日 9時: 精算対象月（＝前月）の定期費目を自動セット
  *  - 毎月5日 9時: 前月分の現金売上を自動取込
- *  - 毎月18日 9時: 振込期限（20日）前のリマインドを本部メールへ送信 */
+ *  - 毎日9時: 振込期限（20日）の3日前・当日・超過後は毎日、ChatWorkへリマインド（判定はsd_remindTick内） */
 function sd_setupAutoPrep(token) {
   sd_auth_(token, true);
   var triggers = ScriptApp.getProjectTriggers();
   var hasPrep = triggers.some(function (t) { return t.getHandlerFunction() === 'sd_autoPrepTick'; });
   var hasCash = triggers.some(function (t) { return t.getHandlerFunction() === 'sd_cashAutoTick'; });
-  var hasRemind = triggers.some(function (t) { return t.getHandlerFunction() === 'sd_remindTick'; });
   var made = [];
   if (!hasPrep) {
     ScriptApp.newTrigger('sd_autoPrepTick').timeBased().onMonthDay(1).atHour(9).create();
@@ -1906,11 +1907,14 @@ function sd_setupAutoPrep(token) {
     ScriptApp.newTrigger('sd_cashAutoTick').timeBased().onMonthDay(5).atHour(9).create();
     made.push('毎月5日9時 現金売上の自動取込');
   }
-  if (!hasRemind) {
-    ScriptApp.newTrigger('sd_remindTick').timeBased().onMonthDay(18).atHour(9).create();
-    made.push('毎月18日9時 振込期限リマインド');
-  }
-  return { ok: true, message: made.length ? made.join('＋') + ' を設定しました' : '自動処理は設定済みです（毎月1日 定期費目セット／毎月5日 現金売上取込／毎月18日 リマインド）' };
+  // 期限リマインドは日付・未対応店舗の有無をsd_remindTick内で毎日判定する方式に変更したため、
+  // トリガー自体は「毎日9時」に統一する。GAS側にはトリガーの詳細スケジュールを取得するAPIが無く
+  // 「旧バージョン（毎月18日のみ）が残っているか」を判別できないため、毎回作り直して確実に揃える。
+  var remindTriggers = triggers.filter(function (t) { return t.getHandlerFunction() === 'sd_remindTick'; });
+  remindTriggers.forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('sd_remindTick').timeBased().everyDays(1).atHour(9).create();
+  made.push('毎日9時 振込期限リマインド（17日・20日・21日以降は未対応があれば毎日ChatWorkへ通知）');
+  return { ok: true, message: made.length ? made.join('＋') + ' を設定しました' : '自動処理は設定済みです（毎月1日 定期費目セット／毎月5日 現金売上取込／毎日 期限リマインド判定）' };
 }
 
 function sd_autoPrepTick() {
@@ -1932,14 +1936,36 @@ function sd_cashAutoTick() {
   }
 }
 
-/* 毎月18日: 振込期限（20日）前のリマインド。入力漏れ疑い・未発行の店舗をまとめて本部へ送信 */
+/* ChatWorkへメッセージ送信（APIトークン・ルームIDは設定_外部連携シートで管理） */
+function sd_notifyChatwork_(message) {
+  var ext = sd_extConfig_();
+  var token = ext['ChatWork APIトークン'];
+  var roomId = ext['ChatWorkルームID（振込リマインド用）'];
+  if (!token || !roomId) {
+    return { sent: false, reason: 'ChatWork未設定（設定_外部連携シートで「ChatWork APIトークン」「ChatWorkルームID（振込リマインド用）」を設定してください）' };
+  }
+  var res = UrlFetchApp.fetch('https://api.chatwork.com/v2/rooms/' + roomId + '/messages', {
+    method: 'post',
+    headers: { 'X-ChatWorkToken': token },
+    payload: { body: message },
+    muteHttpExceptions: true
+  });
+  var code = res.getResponseCode();
+  if (code === 200) return { sent: true };
+  return { sent: false, reason: 'ChatWork送信失敗: HTTP' + code + ' ' + res.getContentText() };
+}
+
+/* 毎日9時に実行（トリガーはsd_setupAutoPrepで作成）。
+ * 振込期限（毎月20日）の3日前（17日）・当日（20日）・超過後（21日以降）は毎日、未対応店舗があればChatWorkへ通知する。
+ * それ以外の日、および対応が必要な店舗が0件のときは何もしない（送信しない）。 */
 function sd_remindTick() {
   var now = new Date();
+  var day = now.getDate();
+  var overdue = day > 20;
+  if (!(day === 17 || day === 20 || overdue)) return { ok: true, message: '対象日ではないためスキップ（17日・20日・21日以降のみ）' };
+
   var monthKey = sd_fmtMonth_(new Date(now.getFullYear(), now.getMonth() - 1, 1)); // 精算対象月＝前月
   var det = sd_detect_();
-  var ext = sd_extConfig_();
-  var to = ext['リマインド送信先'];
-  if (!to) { Logger.log('リマインド送信先が未設定のため送信をスキップしました（設定_外部連携シートで設定してください）'); return { ok: false, message: 'リマインド送信先未設定' }; }
   var cfg = sd_config_(sd_masterStores_(det), det);
   var issued = sd_issuedMap_(det);
   var sent = sd_sentMap_();
@@ -1969,15 +1995,18 @@ function sd_remindTick() {
     lines.push(line);
   });
 
-  var subject = '【リマインド】' + mLabel + '分 業務委託料の振込期限が近づいています（20日期限）';
-  var body = '本部ご担当者様\n\n'
-    + mLabel + '分の業務委託料の振込期限（毎月20日）が近づいています。\n'
-    + '現在の状況をお知らせします（対応が必要: ' + needCount + '店舗）。\n\n'
-    + (lines.length ? lines.join('\n\n') : 'すべての店舗が振込済みです。')
-    + '\n\n※このメールは精算ダッシュボードから毎月18日に自動送信されています。';
-  GmailApp.sendEmail(to, subject, body, { name: ext['メール送信者名'] || '精算ダッシュボード' });
-  sd_log_('期限リマインド', '全店舗', monthKey, subject, '', '', '自動', to);
-  return { ok: true, to: to };
+  if (needCount === 0) return { ok: true, message: '対応が必要な店舗はありません（送信スキップ）' };
+
+  var headline = overdue
+    ? '🚨 ' + mLabel + '分の振込期限（20日）を過ぎています！至急ご対応ください。'
+    : (day === 20 ? '⏰ 本日が' + mLabel + '分の振込期限（20日）です。' : '📅 ' + mLabel + '分の振込期限（20日）まであと3日です。');
+  var message = '[info][title]💰 業務委託料 振込リマインド（対応必要: ' + needCount + '店舗）[/title]'
+    + headline + '\n\n'
+    + lines.join('\n\n')
+    + '[/info]';
+  var result = sd_notifyChatwork_(message);
+  sd_log_('期限リマインド', '全店舗', monthKey, message, '', '', '自動', result.sent ? 'ChatWork' : ('送信失敗: ' + result.reason));
+  return { ok: result.sent, needCount: needCount, reason: result.reason };
 }
 
 /* ---------- ③ 添付ファイル ---------- */
