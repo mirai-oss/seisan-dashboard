@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.10-cwtest-perf';
+var SD_VERSION = 'v5.11-unlockfix';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -432,8 +432,9 @@ function sd_paidStatusMap_(store, client, paidAll) {
   Object.keys(byClient).forEach(function (mk) { months[mk] = true; });
   var out = {};
   Object.keys(months).forEach(function (mk) {
-    var c = byClient[mk], s = byStore[mk];
-    out[mk] = (c && c.done) ? c : ((s && s.done) ? s : (c || s));
+    // 法人単位の記録が一度でもあればそれが正（true/falseどちらでも優先）。
+    // 旧・店舗単位の記録（v5.7以前）は、その月に法人単位の記録が一切無いときだけフォールバックで見る。
+    out[mk] = byClient[mk] || byStore[mk];
   });
   return out;
 }
