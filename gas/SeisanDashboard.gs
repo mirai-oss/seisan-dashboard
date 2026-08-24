@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.11-unlockfix';
+var SD_VERSION = 'v5.14-plsync-paid';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -46,7 +46,7 @@ var SD_API_WHITELIST = [
   'sd_pdfPreview', 'sd_issueAndSend', 'sd_cashPreview', 'sd_cashApply',
   'sd_prepareMonth', 'sd_setupAutoPrep', 'sd_uploadAttachment', 'sd_listAttachments',
   'sd_getPdfB64', 'sd_updateCheckSheet', 'sd_bulkAdd', 'sd_getSettings',
-  'sd_saveAccount', 'sd_saveCorp', 'sd_testChatwork'
+  'sd_saveAccount', 'sd_saveCorp', 'sd_testChatwork', 'sd_apiTransferEx'
 ];
 
 function sd_apiFnMap_() {
@@ -58,7 +58,8 @@ function sd_apiFnMap_() {
     sd_uploadAttachment: sd_uploadAttachment, sd_listAttachments: sd_listAttachments,
     sd_getPdfB64: sd_getPdfB64, sd_updateCheckSheet: sd_updateCheckSheet,
     sd_bulkAdd: sd_bulkAdd, sd_getSettings: sd_getSettings,
-    sd_saveAccount: sd_saveAccount, sd_saveCorp: sd_saveCorp, sd_testChatwork: sd_testChatwork
+    sd_saveAccount: sd_saveAccount, sd_saveCorp: sd_saveCorp, sd_testChatwork: sd_testChatwork,
+    sd_apiTransferEx: sd_apiTransferEx
   };
 }
 
@@ -94,6 +95,39 @@ function doPost(e) {
     return sd_jsonOut_({ ok: false, error: 'リクエストの解析に失敗しました' });
   }
   return sd_jsonOut_(sd_handleApi_(payload.fn, payload.args));
+}
+
+/* ---------- 業務委託費の外部連携（PL自動連携用・2026-08-23追加、2026-08-24: paid判定を追加） ----------
+ * 経営ダッシュボードのPLタブへ「運営委託費（自動）」として反映するため、指定店舗・月の
+ * 業務委託費（税抜）だけを返す軽量API。ログインセッションとは別の専用トークン認証
+ * （tori-dashboard側のBQ_LOAD_TOKENと同じ考え方）。既存のsd_settle_・
+ * sd_buildSeisanHtml_と同じ計算ロジックを流用するだけで、書き込みは一切行わない。
+ * paid: 振込済み（sd_isLocked_）かどうか。呼び出し側（tori-dashboard）は
+ * paid===falseの店舗をPL反映から除外する（未確定の金額をPLに載せないため）。
+ * 呼び出し例: POST {fn:'sd_apiTransferEx', args:[token, '秋葉原 肉寿司', '2026-07']}
+ */
+function sd_apiTransferEx(token, store, monthKey) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  var got = String(token || '').trim(), want = String(tk || '').trim();
+  if (!tk || got !== want) {
+    // 値そのものは出さず、文字数だけ比較してどちら側の設定が怪しいか分かるようにする（一時的な診断用）
+    throw new Error('unauthorized（診断: 受信した長さ=' + got.length + ' / 期待する長さ=' + want.length +
+      ' / PL_SYNC_TOKEN未設定=' + (!tk));
+  }
+  var det = sd_detect_();
+  var cfg = sd_config_(sd_masterStores_(det), det);
+  var st = null;
+  cfg.forEach(function (s) { if (s.name === store) st = s; });
+  // 「見つからない理由」を区別して返す（一時的な診断用）: 店舗マスタに無い／DBシートが特定できない／
+  // 見つかったが対象月の売上行が0件、のどれかで原因が全く違うため。
+  if (!st) return { found: false, reason: '店舗マスタに「' + store + '」という名前が見つかりません（表記ゆれの可能性）', masterNames: cfg.map(function (s) { return s.name; }) };
+  if (!st.db) return { found: false, reason: '店舗は見つかったが、データシートが自動特定できていません（設定シートでDBシート名の紐付けが必要）' };
+  var rows = sd_readRowsCached_(st.db);
+  var s = sd_settle_(rows, monthKey, st.rate, st.fixed);
+  if (!s.hasSales) return { found: true, hasSales: false, reason: monthKey + '分の売上行が0件でした（' + st.db.sheet + 'シート）', rowCountAllMonths: rows.length };
+  var paid = sd_isLocked_(store, monthKey);
+  if (!paid) return { found: true, hasSales: true, paid: false, reason: monthKey + '分はまだ振込済みではありません（未確定のためPL反映対象外）', transferEx: s.transferEx, transfer: s.transfer };
+  return { found: true, hasSales: true, paid: true, transferEx: s.transferEx, transfer: s.transfer };
 }
 
 /* ---------- 初回承認用（エディタから一度実行） ---------- */
