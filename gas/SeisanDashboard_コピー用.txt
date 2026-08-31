@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.11-unlockfix';
+var SD_VERSION = 'v5.15-settings-api';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -46,7 +46,8 @@ var SD_API_WHITELIST = [
   'sd_pdfPreview', 'sd_issueAndSend', 'sd_cashPreview', 'sd_cashApply',
   'sd_prepareMonth', 'sd_setupAutoPrep', 'sd_uploadAttachment', 'sd_listAttachments',
   'sd_getPdfB64', 'sd_updateCheckSheet', 'sd_bulkAdd', 'sd_getSettings',
-  'sd_saveAccount', 'sd_saveCorp', 'sd_testChatwork'
+  'sd_saveAccount', 'sd_saveCorp', 'sd_testChatwork', 'sd_apiTransferEx',
+  'sd_saveStoreRate', 'sd_saveRecurStatus', 'sd_saveOpsSettings', 'sd_getOpsSettings'
 ];
 
 function sd_apiFnMap_() {
@@ -58,7 +59,10 @@ function sd_apiFnMap_() {
     sd_uploadAttachment: sd_uploadAttachment, sd_listAttachments: sd_listAttachments,
     sd_getPdfB64: sd_getPdfB64, sd_updateCheckSheet: sd_updateCheckSheet,
     sd_bulkAdd: sd_bulkAdd, sd_getSettings: sd_getSettings,
-    sd_saveAccount: sd_saveAccount, sd_saveCorp: sd_saveCorp, sd_testChatwork: sd_testChatwork
+    sd_saveAccount: sd_saveAccount, sd_saveCorp: sd_saveCorp, sd_testChatwork: sd_testChatwork,
+    sd_apiTransferEx: sd_apiTransferEx,
+    sd_saveStoreRate: sd_saveStoreRate, sd_saveRecurStatus: sd_saveRecurStatus,
+    sd_saveOpsSettings: sd_saveOpsSettings, sd_getOpsSettings: sd_getOpsSettings
   };
 }
 
@@ -94,6 +98,39 @@ function doPost(e) {
     return sd_jsonOut_({ ok: false, error: 'リクエストの解析に失敗しました' });
   }
   return sd_jsonOut_(sd_handleApi_(payload.fn, payload.args));
+}
+
+/* ---------- 業務委託費の外部連携（PL自動連携用・2026-08-23追加、2026-08-24: paid判定を追加） ----------
+ * 経営ダッシュボードのPLタブへ「運営委託費（自動）」として反映するため、指定店舗・月の
+ * 業務委託費（税抜）だけを返す軽量API。ログインセッションとは別の専用トークン認証
+ * （tori-dashboard側のBQ_LOAD_TOKENと同じ考え方）。既存のsd_settle_・
+ * sd_buildSeisanHtml_と同じ計算ロジックを流用するだけで、書き込みは一切行わない。
+ * paid: 振込済み（sd_isLocked_）かどうか。呼び出し側（tori-dashboard）は
+ * paid===falseの店舗をPL反映から除外する（未確定の金額をPLに載せないため）。
+ * 呼び出し例: POST {fn:'sd_apiTransferEx', args:[token, '秋葉原 肉寿司', '2026-07']}
+ */
+function sd_apiTransferEx(token, store, monthKey) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  var got = String(token || '').trim(), want = String(tk || '').trim();
+  if (!tk || got !== want) {
+    // 値そのものは出さず、文字数だけ比較してどちら側の設定が怪しいか分かるようにする（一時的な診断用）
+    throw new Error('unauthorized（診断: 受信した長さ=' + got.length + ' / 期待する長さ=' + want.length +
+      ' / PL_SYNC_TOKEN未設定=' + (!tk));
+  }
+  var det = sd_detect_();
+  var cfg = sd_config_(sd_masterStores_(det), det);
+  var st = null;
+  cfg.forEach(function (s) { if (s.name === store) st = s; });
+  // 「見つからない理由」を区別して返す（一時的な診断用）: 店舗マスタに無い／DBシートが特定できない／
+  // 見つかったが対象月の売上行が0件、のどれかで原因が全く違うため。
+  if (!st) return { found: false, reason: '店舗マスタに「' + store + '」という名前が見つかりません（表記ゆれの可能性）', masterNames: cfg.map(function (s) { return s.name; }) };
+  if (!st.db) return { found: false, reason: '店舗は見つかったが、データシートが自動特定できていません（設定シートでDBシート名の紐付けが必要）' };
+  var rows = sd_readRowsCached_(st.db);
+  var s = sd_settle_(rows, monthKey, st.rate, st.fixed);
+  if (!s.hasSales) return { found: true, hasSales: false, reason: monthKey + '分の売上行が0件でした（' + st.db.sheet + 'シート）', rowCountAllMonths: rows.length };
+  var paid = sd_isLocked_(store, monthKey);
+  if (!paid) return { found: true, hasSales: true, paid: false, reason: monthKey + '分はまだ振込済みではありません（未確定のためPL反映対象外）', transferEx: s.transferEx, transfer: s.transfer };
+  return { found: true, hasSales: true, paid: true, transferEx: s.transferEx, transfer: s.transfer };
 }
 
 /* ---------- 初回承認用（エディタから一度実行） ---------- */
@@ -799,10 +836,23 @@ function sd_isLocked_(store, monthKey) {
   var rec = sd_paidStatusMap_(store, client, paid)[monthKey];
   return !!(rec && rec.done);
 }
+/* 振込済み後の編集権限レベル。既定は「マスターのみ」。設定タブ（sd_saveOpsSettings）で
+ * 'admin'（本部以上）に変更できる。マスターへの昇格や振込ロックそのものの解除
+ * （sd_requireMaster_系）はここには含めない＝権限昇格の抜け道にしない。 */
+function sd_lockLevel_() {
+  var v = PropertiesService.getScriptProperties().getProperty('SD_LOCK_LEVEL');
+  return (v === 'admin') ? 'admin' : 'master';
+}
+function sd_canEditLocked_(user) {
+  if (user.role === 'マスター') return true;
+  if (sd_lockLevel_() === 'admin' && user.role === '本部') return true;
+  return false;
+}
 function sd_requireUnlocked_(user, store, monthKey) {
-  if (user.role === 'マスター') return;
+  if (sd_canEditLocked_(user)) return;
   if (sd_isLocked_(store, monthKey)) {
-    throw new Error('🔒「' + store + '」' + sd_monthLabel_(monthKey) + '分は振込済みでロックされています。編集にはマスターアカウントが必要です。');
+    var need = sd_lockLevel_() === 'admin' ? '本部以上の' : 'マスター';
+    throw new Error('🔒「' + store + '」' + sd_monthLabel_(monthKey) + '分は振込済みでロックされています。編集には' + need + 'アカウントが必要です。');
   }
 }
 
@@ -1857,9 +1907,10 @@ function sd_prepareMonthCore_(monthKey, editorName, skipLocked) {
       cur[key] = true;
       toAdd.push({ kubun: r.kubun, item: r.item, amount: r.amount, tax: r.tax || '10%', note: r.note });
     });
-    // 定期費目シート
+    // 定期費目シート（状態=停止の行はスキップ）
     recur.forEach(function (rc) {
       if (sd_norm_(rc.store) !== sd_norm_(st.name)) return;
+      if (rc.status === '停止') return;
       var key = sd_norm_(rc.kubun) + '|' + sd_norm_(rc.item);
       if (cur[key]) return;
       cur[key] = true;
@@ -1875,30 +1926,63 @@ function sd_prepareMonthCore_(monthKey, editorName, skipLocked) {
   return { ok: true, results: results };
 }
 
+/* 状態列（7列目・有効/停止・既定=有効）を持たない旧シートには自動でヘッダーを追加する。
+ * v3.x UI刷新で「定期費目の毎月／停止」切替を追加するために2026-08-31導入。 */
+function sd_recurEnsureStatusCol_(sh) {
+  var header = sh.getRange(1, 1, 1, Math.max(7, sh.getLastColumn())).getDisplayValues()[0];
+  if (sd_norm_(header[6]) !== '状態') {
+    sh.getRange(1, 7).setValue('状態');
+  }
+}
+
 function sd_recurRows_() {
   var ss = SpreadsheetApp.getActive();
   var sh = ss.getSheetByName(SD_RECUR_SHEET);
   if (!sh) {
     sh = ss.insertSheet(SD_RECUR_SHEET);
-    sh.getRange(1, 1, 1, 6).setValues([['店舗名', '区分', '費目名', '金額（税込）', '税率', '備考']]);
+    sh.getRange(1, 1, 1, 7).setValues([['店舗名', '区分', '費目名', '金額（税込）', '税率', '備考', '状態']]);
     sh.setFrozenRows(1);
-    sh.getRange(2, 1, 1, 6).setValues([['（例）秋葉原 肉寿司', '固定ロイヤリティ', '固定ロイヤリティ', 440000, '10%', '新契約に伴う委託料　※行頭の（例）を消すと有効']]);
-    sh.autoResizeColumns(1, 6);
+    sh.getRange(2, 1, 1, 7).setValues([['（例）秋葉原 肉寿司', '固定ロイヤリティ', '固定ロイヤリティ', 440000, '10%', '新契約に伴う委託料　※行頭の（例）を消すと有効', '有効']]);
+    sh.autoResizeColumns(1, 7);
     return [];
   }
+  sd_recurEnsureStatusCol_(sh);
   var lastR = sh.getLastRow();
   if (lastR < 2) return [];
   var out = [];
-  sh.getRange(2, 1, lastR - 1, 6).getDisplayValues().forEach(function (r) {
+  sh.getRange(2, 1, lastR - 1, 7).getDisplayValues().forEach(function (r, i) {
     var store = String(r[0]).trim();
     if (!store || store.indexOf('（例）') === 0) return;
     out.push({
+      row: i + 2,
       store: store, kubun: String(r[1]).trim() || '変動費', item: String(r[2]).trim(),
       amount: Number(String(r[3]).replace(/[¥￥,，\s]/g, '')) || 0,
-      tax: sd_norm_(r[4]) || '10%', note: String(r[5]).trim()
+      tax: sd_norm_(r[4]) || '10%', note: String(r[5]).trim(),
+      status: sd_norm_(r[6]) === '停止' ? '停止' : '有効'
     });
   });
   return out.filter(function (r) { return r.item; });
+}
+
+/* 定期費目の「毎月／停止」切替（設定タブ）。マスター/本部のみ。行が無ければ何もしない
+ * （新規追加はスプレッドシートを直接編集する既存フローのまま＝過剰実装を避ける）。 */
+function sd_saveRecurStatus(token, store, item, status) {
+  sd_auth_(token, true);
+  var st = sd_norm_(status) === '停止' ? '停止' : '有効';
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SD_RECUR_SHEET);
+  if (!sh) throw new Error('「' + SD_RECUR_SHEET + '」シートが見つかりません');
+  sd_recurEnsureStatusCol_(sh);
+  var lastR = sh.getLastRow();
+  if (lastR < 2) throw new Error('該当する定期費目が見つかりません: ' + store + ' / ' + item);
+  var vals = sh.getRange(2, 1, lastR - 1, 3).getDisplayValues();
+  var row = 0;
+  for (var i = 0; i < vals.length; i++) {
+    if (sd_norm_(vals[i][0]) === sd_norm_(store) && sd_norm_(vals[i][2]) === sd_norm_(item)) { row = i + 2; break; }
+  }
+  if (!row) throw new Error('該当する定期費目が見つかりません: ' + store + ' / ' + item);
+  sh.getRange(row, 7).setValue(st);
+  return { ok: true, store: store, item: item, status: st };
 }
 
 /* 自動処理のセットアップ:
@@ -2309,6 +2393,57 @@ function sd_saveCorp(token, corp) {
   if (row) sh.getRange(row, 1, 1, 3).setValues([rec]);
   else sh.appendRow(rec);
   return { ok: true, client: client, updated: !!row };
+}
+
+/* ロイヤリティ率設定（設定タブ）。「店舗設定マスター」シートの該当行・ロイヤリティ率列を直接
+ * 書き換える。従来は本シートを手で開いて編集していたのをUIから可能にする。マスター/本部のみ。 */
+function sd_saveStoreRate(token, store, rate) {
+  sd_auth_(token, true);
+  var det = sd_detect_();
+  if (!det.master) throw new Error('「店舗設定マスター」が見つかりません');
+  var sh = SpreadsheetApp.getActive().getSheetByName(det.master.sheet);
+  var hr = det.master.headerRow;
+  var lastR = sh.getLastRow(), lastC = sh.getLastColumn();
+  if (lastR <= hr) throw new Error('店舗設定マスターにデータがありません');
+  var header = sh.getRange(hr, 1, 1, lastC).getDisplayValues()[0].map(sd_norm_);
+  var iName = header.indexOf('店舗名');
+  var iRate = -1;
+  header.forEach(function (h, i) { if (iRate < 0 && h.indexOf('ロイヤリティ率') > -1) iRate = i; });
+  if (iName < 0 || iRate < 0) throw new Error('店舗設定マスターに「店舗名」または「ロイヤリティ率」列が見つかりません');
+  var vals = sh.getRange(hr + 1, 1, lastR - hr, lastC).getDisplayValues();
+  var row = 0;
+  for (var i = 0; i < vals.length; i++) {
+    var nm = String(vals[i][iName] || '').trim();
+    if (!nm) break;
+    if (sd_norm_(nm) === sd_norm_(store)) { row = hr + 1 + i; break; }
+  }
+  if (!row) throw new Error('店舗設定マスターに「' + store + '」が見つかりません');
+  sh.getRange(row, iRate + 1).setValue(String(rate));
+  return { ok: true, store: store, rate: String(rate) };
+}
+
+/* ⚙自動処理・権限（設定タブ）。SD_LOCK_LEVEL（振込済み後の編集権限。master=マスターのみ／
+ * admin=本部以上）とSD_AUTOSEND_MODE（発行モーダルの送信チェックボックスの既定値。manual/auto）
+ * をScript Propertiesに保存するだけの軽量設定。承認フローや自動送信そのものを新設するものではない。 */
+function sd_saveOpsSettings(token, settings) {
+  var user = sd_auth_(token, true);
+  sd_requireMaster_(user);
+  var s = settings || {};
+  var lockLevel = s.lockLevel === 'admin' ? 'admin' : 'master';
+  var autoSendMode = s.autoSendMode === 'auto' ? 'auto' : 'manual';
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('SD_LOCK_LEVEL', lockLevel);
+  props.setProperty('SD_AUTOSEND_MODE', autoSendMode);
+  return { ok: true, lockLevel: lockLevel, autoSendMode: autoSendMode };
+}
+
+function sd_getOpsSettings(token) {
+  sd_auth_(token, true);
+  return { ok: true, lockLevel: sd_lockLevel_(), autoSendMode: sd_autoSendMode_() };
+}
+function sd_autoSendMode_() {
+  var v = PropertiesService.getScriptProperties().getProperty('SD_AUTOSEND_MODE');
+  return (v === 'auto') ? 'auto' : 'manual';
 }
 
 /* ---------- シート版チェック表（本部） ---------- */
