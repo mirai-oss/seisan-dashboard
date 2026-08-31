@@ -205,6 +205,16 @@ function sd_detect_() {
   try { cache.put('sd_detect_v1', JSON.stringify(res), 600); } catch (e) { /* 100KB超なら諦めてキャッシュしない */ }
   return res;
 }
+/* 2026-08-31追加（ユーザー報告「手動で勘定科目を保存しても反映されない」で発覚したバグの修正）:
+ * sd_ensureCategoryCols_等が列を新規挿入してcolMapを更新しても、その変更は呼び出し元が
+ * 保持するdetオブジェクト（そのリクエスト限りのローカルコピー）にしか反映されず、
+ * sd_detect_の10分間CacheServiceキャッシュには反映されないままだった。そのため、
+ * 列挿入直後〜キャッシュ失効までの最大10分間は「保存はできたが読み直すと空欄に見える」
+ * 「もう一度保存すると列が重複して増える」といった不整合が起きていた。列を新規作成した
+ * 直後は必ずこの関数でキャッシュを破棄し、次回呼び出しで最新のシート構造を読み直させる。 */
+function sd_clearDetectCache_() {
+  try { CacheService.getScriptCache().remove('sd_detect_v1'); } catch (e) { /* noop */ }
+}
 
 function sd_detectRaw_() {
   var ss = SpreadsheetApp.getActive();
@@ -1244,11 +1254,16 @@ function sd_updateRow(token, payload) {
     timer.mark('detectSheets');
 
     // 修正日列が無ければヘッダー行に自動作成（列幅が変わるので、行の一括読み込みより先に確定させる）
+    // 2026-08-31修正: 従来はwidth0+1へ直接setValueしており、colMapが認識しない既存の
+    // 「備考・スクラッチ用」列と衝突する恐れがあった（勘定科目列で実際に発生した事故と同じ原因）。
+    // sd_ensureCategoryCols_と同じinsertColumnAfterパターンに統一し、キャッシュも破棄する。
     if (!cm.edited) {
       var width0 = 0;
       Object.keys(cm).forEach(function (k) { if (cm[k] > width0) width0 = cm[k]; });
+      sh.insertColumnAfter(width0);
       sh.getRange(st.db.headerRow, width0 + 1).setValue('修正日');
       cm.edited = width0 + 1;
+      sd_clearDetectCache_();
     }
     sd_ensureCategoryCols_(st.db); // 勘定科目・補助科目列も同様に自動作成（A-9）
     var width = 0;
@@ -1424,6 +1439,7 @@ function sd_ensureCategoryCols_(db) {
     sh.getRange(db.headerRow, width + 1).setValue('補助科目');
     cm.subAccount = width + 1;
   }
+  sd_clearDetectCache_(); // 列構成が変わったので、10分キャッシュを次回呼び出し用に破棄する
 }
 /* 「既定値の自動提案」②前月の同項目の科目を引き継ぐ。直近で同じ費目名に付けた科目・補助科目を
  * そのDBシートの全行から探す（月をまたいでも一番新しい行を優先＝実質「前回選んだもの」）。 */
