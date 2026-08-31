@@ -1400,14 +1400,30 @@ function sd_guessAccount_(item) {
 /* 勘定科目・補助科目列（無ければヘッダー行の末尾に自動作成）。sd_updateRowの「修正日列が無ければ
  * 自動作成」と同じ自己修復パターン。書き込み系API（sd_addRows/sd_updateRow/sd_bulkAdd/
  * sd_bulkCategorize）から呼ぶこと。 */
+// 2026-08-31修正（ユーザー報告「勘定科目に全然違う値が入っている」で発覚した重大バグの修正）:
+// 従来は「colMapが知っている列の最大値+1」を空き列とみなして直接setValueしていたが、実際の
+// 店舗DBシートには修正日列より右側に、colMapが認識しない「備考・スクラッチ用」の列（内容は
+// 店舗ごとにバラバラ・会社情報や別行の内容が紛れ込んでいるように見えるものもある）が既に
+// 存在しており、そこへ無条件に上書きしてしまっていた。sh.insertColumnAfter()でヘッダー列の
+// 直後に新しい列を物理的に挿入し、既存の列（内容不明でも）をすべて右にずらして退避させる
+// 方式に変更。これなら既存データに一切触れずに安全に新列を確保できる。
 function sd_ensureCategoryCols_(db) {
   var cm = db.colMap;
   if (cm.account && cm.subAccount) return;
   var sh = SpreadsheetApp.getActive().getSheetByName(db.sheet);
   var width = 0;
   Object.keys(cm).forEach(function (k) { if (cm[k] > width) width = cm[k]; });
-  if (!cm.account) { width++; sh.getRange(db.headerRow, width).setValue('勘定科目'); cm.account = width; }
-  if (!cm.subAccount) { width++; sh.getRange(db.headerRow, width).setValue('補助科目'); cm.subAccount = width; }
+  if (!cm.account) {
+    sh.insertColumnAfter(width);
+    sh.getRange(db.headerRow, width + 1).setValue('勘定科目');
+    cm.account = width + 1;
+    width += 1; // 補助科目はこの直後に挿入するので、その位置計算に反映させる
+  }
+  if (!cm.subAccount) {
+    sh.insertColumnAfter(width);
+    sh.getRange(db.headerRow, width + 1).setValue('補助科目');
+    cm.subAccount = width + 1;
+  }
 }
 /* 「既定値の自動提案」②前月の同項目の科目を引き継ぐ。直近で同じ費目名に付けた科目・補助科目を
  * そのDBシートの全行から探す（月をまたいでも一番新しい行を優先＝実質「前回選んだもの」）。 */
