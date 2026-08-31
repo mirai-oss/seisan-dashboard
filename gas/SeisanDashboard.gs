@@ -2334,10 +2334,16 @@ function sd_getSettings(token) {
       corpList.push({ client: c, account: info.account || '', note: info.note || '' });
     }
   });
+  // 定期費目（🔁設定タブ用。店舗×費目の一覧に状態(有効/停止)を添えて返す。書き込みはsd_saveRecurStatus）
+  var recur = sd_recurRows_().map(function (r) {
+    return { store: r.store, kubun: r.kubun, item: r.item, amount: r.amount, status: r.status };
+  });
   return {
     accounts: accounts,
     corps: corpList,
     stores: cfg.map(function (s) { return { name: s.name, client: s.client, rate: s.rate, hasDb: !!s.db }; }),
+    recur: recur,
+    ops: { lockLevel: sd_lockLevel_(), autoSendMode: sd_autoSendMode_() },
     masterSheetUrl: SpreadsheetApp.getActive().getUrl()
   };
 }

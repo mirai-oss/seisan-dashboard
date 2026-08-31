@@ -5,207 +5,161 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>精算ダッシュボード</title>
 <style>
+  /* ===== N-Styleポータル共通デザイントークン（モックアップv3から採用） ===== */
   :root{
-    --bg:#f5f6f8; --card:#ffffff; --ink:#1f2430; --ink2:#5b6472; --ink3:#8a91a0;
-    --line:#e3e6ec; --accent:#2f6fed; --accent-soft:#e8f0fe;
-    --good:#1e7f4f; --good-bg:#e5f4ec;
-    --warn:#9a6700; --warn-bg:#fff4d6;
-    --bad:#c0392b; --bad-bg:#fdebe8;
-    --paid:#6b5bd2; --paid-bg:#eeebfb;
-    --radius:12px;
+    --bg:#f4f1eb; --panel:#ffffff; --ink:#231f1a; --muted:#7d756d; --line:#e4ddd4;
+    --nav:#211d18; --nav2:#2e2923; --accent:#c94728; --accent-soft:#fce9e3;
+    --green:#2f8f63; --green-soft:#e7f5ed; --amber:#b77b13; --amber-soft:#fff3d8;
+    --blue:#2f6fb7; --blue-soft:#e8f0fb; --shadow:0 8px 28px rgba(35,31,26,.08); --radius:16px;
   }
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:"Hiragino Sans","Yu Gothic UI","Noto Sans JP",sans-serif;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.6}
-  .wrap{max-width:1160px;margin:0 auto;padding:16px 16px 64px}
-
-  header.app{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:14px 0}
-  header.app h1{font-size:18px;font-weight:700;margin-right:auto}
-  header.app .sub{color:var(--ink3);font-size:12px;width:100%}
-  .whoami{font-size:12px;color:var(--ink2);background:var(--card);border:1px solid var(--line);border-radius:999px;padding:4px 12px}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans","Yu Gothic UI","Noto Sans JP",sans-serif;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.6}
+  button,input,select,textarea{font:inherit}
   a.plain{color:var(--accent);text-decoration:none}
   a.plain:hover{text-decoration:underline}
+  .muted{color:var(--muted);font-size:12px}
 
-  .tabs{display:flex;gap:8px;margin:8px 0 16px;flex-wrap:wrap}
-  .tabs button{flex:0 0 auto;padding:9px 22px;border:1px solid var(--line);border-radius:999px;background:var(--card);font-size:14px;cursor:pointer;color:var(--ink2)}
-  .tabs button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
-
-  .monthbar{display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap}
-  .monthbar button{width:36px;height:36px;border:1px solid var(--line);background:var(--card);border-radius:8px;font-size:16px;cursor:pointer}
-  .monthbar select{height:36px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:15px;font-weight:700;padding:0 10px}
-  .monthbar .spacer{flex:1}
-  .monthbar .reload{width:auto;padding:0 14px;font-size:13px;color:var(--ink2)}
-
-  .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
-  .card h2{font-size:15px;margin-bottom:10px}
-
-  .stores{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
-  .store{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;display:flex;flex-direction:column;gap:9px}
-  .store .top{display:flex;align-items:flex-start;gap:8px}
-  .store .name{font-weight:700;font-size:15px}
-  .store .client{color:var(--ink3);font-size:12px}
-  .chip{margin-left:auto;flex:0 0 auto;font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px}
-  .chip.good{color:var(--good);background:var(--good-bg)}
-  .chip.warn{color:var(--warn);background:var(--warn-bg)}
-  .chip.bad{color:var(--bad);background:var(--bad-bg)}
-  .chip.paid{color:var(--paid);background:var(--paid-bg)}
-
-  .transfer-box{display:flex;align-items:baseline;gap:10px;background:#f8fafd;border:1px solid var(--line);border-radius:10px;padding:9px 14px;flex-wrap:wrap}
-  .transfer-box .lab{font-size:12px;color:var(--ink2)}
-  .transfer-box .val{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:.2px}
-  .transfer-box .val.neg{color:var(--bad)}
-  .transfer-box .undet{font-size:14px;color:var(--ink3);font-weight:700}
-  .transfer-box .toggle{margin-left:auto;font-size:12px;color:var(--accent);cursor:pointer;border:none;background:none}
-
-  table.settle{width:100%;border-collapse:collapse;font-size:12.5px}
-  table.settle td{padding:3px 4px;border-bottom:1px dashed var(--line)}
-  table.settle td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-  table.settle tr.sec td{color:var(--ink2);font-weight:700;border-bottom:1px solid var(--line);padding-top:8px}
-  table.settle tr.total td{font-weight:800;border-bottom:none;font-size:13.5px}
-  table.settle td.ind{padding-left:16px;color:var(--ink2)}
-
-  .nums{display:flex;gap:16px;font-size:12px;color:var(--ink2)}
-  .nums b{display:block;font-size:14px;color:var(--ink);font-variant-numeric:tabular-nums}
-  .miss{border-top:1px dashed var(--line);padding-top:8px}
-  .miss .t{font-size:12px;color:var(--ink2);margin-bottom:4px}
-  .miss .items{display:flex;flex-wrap:wrap;gap:6px}
-  .mchip{font-size:12px;padding:2px 9px;border-radius:999px;background:var(--bad-bg);color:var(--bad);border:1px solid #f3c4bd}
-  .mchip.cat{background:var(--warn-bg);color:var(--warn);border-color:#ecd9a0}
-  .ok-note{font-size:12px;color:var(--good)}
-  .sent-note{font-size:12px;color:var(--ink2)}
-  .salescheck{font-size:12.5px;border-radius:8px;padding:7px 10px;border:1px solid var(--line)}
-  .salescheck.ok{color:var(--good);background:var(--good-bg);border-color:#bfe3cd}
-  .salescheck.warn{color:var(--warn);background:var(--warn-bg);border-color:#ecd9a0;font-weight:700}
-  .salescheck .sc-detail{font-weight:400;color:var(--ink2);font-size:12px;margin-top:2px}
-  .salescheck .sc-note{font-weight:400;color:var(--ink3);font-size:11px;margin-top:2px}
-  .paidline{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink2)}
-  .lockline{font-size:12px;font-weight:700;color:var(--paid);background:var(--paid-bg);border:1px solid #d6cef5;border-radius:8px;padding:6px 10px}
-  .lockline.master{color:var(--good);background:var(--good-bg);border-color:#bfe3cd}
-  .lock-banner{border-radius:var(--radius);padding:12px 16px;margin-bottom:14px;background:var(--paid-bg);border:1px solid #d6cef5;color:var(--paid);font-weight:700;font-size:13px}
-  .paidline input{width:16px;height:16px;accent-color:var(--paid)}
-  .store .actions{margin-top:auto;display:flex;gap:6px;flex-wrap:wrap}
-  .btn{display:inline-block;padding:8px 13px;border-radius:8px;border:1px solid var(--line);background:var(--card);cursor:pointer;font-size:13px;color:var(--ink)}
+  .btn{border:1px solid var(--line);background:#fff;padding:9px 13px;border-radius:10px;cursor:pointer;font-size:13px;color:var(--ink)}
   .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
-  .btn.primary:disabled,.btn:disabled{opacity:.5;cursor:default}
+  .btn.mail{background:#fff7df;border-color:#ead28d;color:#8b6516}
   .btn.ghost{color:var(--accent);border-color:var(--accent-soft);background:var(--accent-soft)}
-  .btn.danger{color:var(--bad);border-color:#f3c4bd;background:var(--bad-bg)}
+  .btn.danger{color:#c0392b;border-color:#f3c4bd;background:#fdebe8}
   .btn.sm{padding:6px 10px;font-size:12px}
+  .btn:disabled{opacity:.5;cursor:default}
 
-  /* 法人別 */
-  .corp{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
-  .corp .chead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
-  .corp .cname{font-size:16px;font-weight:800}
-  .corp .csum{margin-left:auto;text-align:right}
-  .corp .csum .lab{font-size:11px;color:var(--ink2)}
-  .corp .csum .val{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}
-  .corp .account{font-size:12.5px;color:var(--ink2);background:#f8fafd;border:1px dashed var(--line);border-radius:8px;padding:6px 12px;margin-bottom:10px}
-  .corp .account.missing{color:var(--warn);background:var(--warn-bg);border-color:#ecd9a0}
-  table.corpt{width:100%;border-collapse:collapse;font-size:13px}
-  table.corpt th,table.corpt td{border-bottom:1px solid var(--line);padding:7px 6px;text-align:left}
-  table.corpt th{color:var(--ink2);font-weight:600;font-size:12px}
-  table.corpt td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-  .st-tag{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
-  .st-tag.good{color:var(--good);background:var(--good-bg)}
-  .st-tag.warn{color:var(--warn);background:var(--warn-bg)}
-  .st-tag.bad{color:var(--bad);background:var(--bad-bg)}
-  .st-tag.paid{color:var(--paid);background:var(--paid-bg)}
+  .pill{display:inline-block;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:700;white-space:nowrap}
+  .pill.green{background:var(--green-soft);color:var(--green)}
+  .pill.red{background:var(--accent-soft);color:var(--accent)}
+  .pill.amber{background:var(--amber-soft);color:var(--amber)}
+  .pill.blue{background:var(--blue-soft);color:var(--blue)}
+  .pill.paid{background:#eee7fb;color:#7155a2}
 
+  .wrap{max-width:1400px;margin:0 auto;padding:16px 20px 60px}
+  header.app{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:6px 0 16px}
+  header.app h1{font-size:19px;font-weight:800;margin:0 auto 0 0}
+  header.app .sub{color:var(--muted);font-size:12px;width:100%}
+  .whoami{font-size:12px;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:5px 12px}
+
+  /* ===== 精算ダッシュボード専用（モックアップの.settle-*をそのまま採用） ===== */
+  .settle-shell{--s-blue:#2f73eb;--s-blue-soft:#eef4ff;--s-green:#218c5b;--s-green-soft:#eaf7f0;--s-red:#c94735;--s-red-soft:#fff0ed;--s-amber:#b77a12;--s-amber-soft:#fff7df}
+  .settle-top-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .settle-tab{border:1px solid var(--line);background:#fff;border-radius:999px;padding:10px 16px;font-size:12px;font-weight:700;cursor:pointer;color:var(--ink)}
+  .settle-tab.active{background:var(--s-blue);border-color:var(--s-blue);color:#fff}
+  .settle-subpage{display:none}.settle-subpage.active{display:block}
+  .settle-monthbar{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .settle-monthleft,.settle-monthright{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .settle-month{border:1px solid var(--line);background:#fff;border-radius:9px;padding:10px 14px;font-weight:800}
+  .settle-actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .settle-action{border:1px solid #dbe7ff;background:var(--s-blue-soft);color:#2f73eb;border-radius:9px;padding:9px 12px;font-size:11px;font-weight:700;cursor:pointer}
+  .settle-action.neutral{background:#fff;color:var(--ink);border-color:var(--line)}
+  .settle-log{background:#fff;border:1px solid var(--line);border-radius:12px;margin-bottom:14px;overflow:hidden}
+  .settle-log-head{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:10px 13px;cursor:pointer}
+  .settle-log-head b{font-size:11px}.settle-log-head small{color:var(--muted)}
+  .settle-log-body{display:none;padding:0 13px 12px;font-size:10px;color:#b73d2d;line-height:1.7;font-family:monospace}.settle-log.open .settle-log-body{display:block}
+  .settle-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:14px}
+  .settle-kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:13px;box-shadow:0 5px 20px rgba(42,36,30,.05)}
+  .settle-kpi small{display:block;color:var(--muted);font-size:9px}.settle-kpi b{display:block;font-size:20px;margin-top:4px}.settle-kpi .sub{font-size:9px;color:var(--muted);margin-top:3px}
+  .settle-storegrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+  .settle-storecard{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:0 6px 24px rgba(42,36,30,.06);display:flex;flex-direction:column;gap:8px}
+  .settle-storehead{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.settle-storehead h3{margin:0;font-size:15px}.settle-storehead p{margin:4px 0 0;color:var(--muted);font-size:10px}
+  .settle-amount{margin:2px 0;border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;justify-content:space-between;align-items:center;background:#fbfcff}
+  .settle-amount small{color:var(--muted);font-size:9px}.settle-amount b{font-size:24px}
+  .settle-amount .undet{font-size:13px;color:var(--muted);font-weight:700}
+  .settle-amount .toggle{border:none;background:none;color:var(--s-blue);font-size:11px;cursor:pointer}
+  .settle-minigrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;border-bottom:1px dashed var(--line);padding-bottom:10px}
+  .settle-mini small{display:block;color:var(--muted);font-size:9px}.settle-mini b{display:block;font-size:13px;margin-top:3px}
+  .settle-label{font-size:10px;color:var(--muted);margin:4px 0 5px}.settle-chips{display:flex;gap:5px;flex-wrap:wrap}
+  .settle-chip{display:inline-block;padding:4px 7px;border-radius:999px;font-size:9px;font-weight:700;background:var(--s-red-soft);color:#b94837;border:1px solid #f4c4bb;cursor:default}
+  .settle-chip.amber{background:var(--s-amber-soft);color:#94680f;border-color:#eed899}
+  .settle-alert{margin-top:2px;padding:9px 10px;border:1px solid #eed08a;background:#fff7dc;border-radius:9px;font-size:10px;color:#75591b;line-height:1.5}
+  .settle-alert b{display:block;margin-bottom:2px}
+  .settle-ok{font-size:10px;color:var(--s-green);margin-top:2px}
+  .settle-meta{font-size:9px;color:var(--muted);line-height:1.5}
+  .settle-lock{background:var(--s-green-soft);color:#26754f;border:1px solid #bce6ce;border-radius:8px;padding:8px;font-size:9px;font-weight:700}
+  .settle-lock.locked{background:#eee7fb;color:#5b3e9c;border-color:#d6cef5}
+  .settle-corp{background:#fff;border:1px solid var(--line);border-radius:14px;padding:15px;box-shadow:0 6px 24px rgba(42,36,30,.05);margin-bottom:12px}
+  .settle-corphead{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}.settle-corphead h3{margin:0;font-size:16px}.settle-corphead small{color:var(--muted);font-size:10px}.settle-corp-total{text-align:right}.settle-corp-total b{display:block;font-size:25px}
+  .settle-warning{background:#fff7df;border:1px dashed #e8cd7c;border-radius:8px;padding:8px 10px;color:#886516;font-size:10px;margin:10px 0}
+  .settle-tablewrap{overflow:auto}.settle-table{width:100%;border-collapse:collapse}.settle-table th,.settle-table td{padding:10px 11px;border-bottom:1px solid var(--line);font-size:10px;text-align:left;white-space:nowrap}.settle-table th{color:var(--muted);background:#faf8f5}
+  .settle-badge{display:inline-block;padding:4px 7px;border-radius:999px;font-size:9px;font-weight:800}.settle-badge.ok{background:var(--s-green-soft);color:#26754f}.settle-badge.paid{background:#eee7fb;color:#7155a2}.settle-badge.warn{background:var(--s-amber-soft);color:#90600d}.settle-badge.bad{background:var(--s-red-soft);color:#b94837}
+  .settle-yearcard{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 6px 24px rgba(42,36,30,.05);overflow:hidden}
+  .settle-yearhead{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .settle-seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}.settle-seg button{border:0;background:#fff;padding:8px 12px;font-size:10px;cursor:pointer}.settle-seg button.active{background:var(--s-blue);color:#fff}
+  .settle-year-table{width:100%;border-collapse:collapse;min-width:1100px}.settle-year-table th,.settle-year-table td{border:1px solid var(--line);padding:8px 9px;font-size:9px;text-align:right;white-space:nowrap}.settle-year-table th{background:#faf8f5;color:var(--muted)}.settle-year-table th:first-child,.settle-year-table td:first-child{text-align:left;position:sticky;left:0;background:#fff;z-index:1}.settle-year-table tr.total td{font-weight:800;background:#f2f6fd}
+  .settle-entry-banner{background:#eef4ff;border:1px solid #bed2ff;border-radius:9px;padding:10px 12px;color:#2f65c8;font-size:10px;margin-bottom:12px}.settle-entry-banner b{font-size:16px}
+  .settle-entry-card{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 6px 24px rgba(42,36,30,.05);padding:14px}
+  .settle-entry-top{display:grid;grid-template-columns:180px 180px 180px;gap:10px;margin-bottom:12px}.settle-entry-top label,.settle-form-row label{display:block;color:var(--muted);font-size:9px;margin-bottom:4px}.settle-entry-top select,.settle-entry-top input,.settle-form-row input,.settle-form-row select{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px;background:#fff}
+  .settle-form-head,.settle-form-row{display:grid;grid-template-columns:110px minmax(180px,1.2fr) 140px 90px minmax(180px,1.4fr) 180px 30px;gap:8px;align-items:center}
+  .settle-form-head{padding:8px;color:var(--muted);font-size:9px;font-weight:700}.settle-form-row{padding:7px;border-bottom:1px solid var(--line)}
+  .settle-file{border:1px solid var(--line);border-radius:8px;padding:5px;font-size:9px;background:#faf8f5;overflow:hidden}
+  .settle-entry-actions{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-top:12px}
+  .settle-editbtn{border:1px solid #f0c0b6;background:#fff0ed;color:#b44331;border-radius:8px;padding:6px 9px;font-size:9px;cursor:pointer}
+  .settle-setting-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .settle-setting{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px}.settle-setting h3{margin:0 0 4px;font-size:14px}.settle-setting p{margin:0 0 10px;color:var(--muted);font-size:9px}
+  .settle-setting-row{display:grid;grid-template-columns:1fr 160px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}.settle-setting-row:last-child{border:0}.settle-setting-row strong{font-size:10px;font-weight:700}.settle-setting-row select,.settle-setting-row input{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px;font-size:12px}
+  .settle-doc-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px;padding-top:8px;border-top:1px dashed var(--line)}
+  .settle-doc-actions .btn{font-size:10px;padding:7px 8px}
+  .settle-sendline{margin-top:2px;padding:8px 9px;border:1px solid var(--line);background:#faf8f5;border-radius:8px;display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:9px;color:var(--muted)}
+  .settle-sendline strong{color:var(--ink);font-size:9px}
+  .settle-batch-actions{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0 0}
+  .settle-batch-actions .btn{font-size:10px;padding:7px 9px}
+  .settle-preview{background:#fff;border:1px solid #ddd6cf;border-radius:12px;padding:16px}
+  .settle-history-list{display:grid;gap:8px}
+  .settle-history-item{border:1px solid var(--line);border-radius:9px;padding:9px;background:#faf8f5}
+  .settle-history-item b{font-size:11px}.settle-history-item p{font-size:10px;color:var(--muted);margin:3px 0 0;line-height:1.5}
+  @media(max-width:1200px){.settle-summary{grid-template-columns:repeat(3,1fr)}.settle-storegrid{grid-template-columns:1fr 1fr}.settle-form-head,.settle-form-row{grid-template-columns:90px minmax(150px,1fr) 110px 80px minmax(150px,1fr) 130px 28px}}
+  @media(max-width:760px){
+    .settle-summary{grid-template-columns:1fr 1fr}.settle-storegrid,.settle-setting-grid{grid-template-columns:1fr}.settle-entry-top{grid-template-columns:1fr}
+    .settle-form-head{display:none}.settle-form-row{display:grid;grid-template-columns:1fr 1fr;padding:10px}.settle-form-row>div:nth-child(2),.settle-form-row>div:nth-child(5),.settle-form-row>div:nth-child(6){grid-column:1/-1}
+    .settle-corphead{display:block}.settle-corp-total{text-align:left;margin-top:8px}
+  }
+
+  /* ===== 汎用モーダル（モックアップの.info-modalを流用） ===== */
+  .info-modal{position:fixed;inset:0;background:#211d1870;display:none;align-items:center;justify-content:center;padding:20px;z-index:80;backdrop-filter:blur(3px)}
+  .info-modal.show{display:flex}
+  .info-modalbox{background:#fff;width:min(880px,96vw);max-height:88vh;overflow:auto;border-radius:15px;box-shadow:0 25px 80px #0003;display:flex;flex-direction:column}
+  .info-modalhead{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding:15px 17px;font-weight:800;gap:10px}
+  .info-modalbody{padding:17px}
+
+  /* ===== 店舗×月マトリクス／推移グラフ（モックに無い既存機能。継続採用） ===== */
   .matrix-scroll{overflow-x:auto}
   table.matrix{border-collapse:collapse;white-space:nowrap;width:100%}
   table.matrix th,table.matrix td{border:1px solid var(--line);padding:6px 8px;font-size:12px;text-align:center}
-  table.matrix th{background:#fafbfc;color:var(--ink2);font-weight:600}
-  table.matrix td.store-name{text-align:left;font-weight:600;background:#fafbfc}
-  table.matrix td.sel{outline:2px solid var(--accent);outline-offset:-2px}
-  table.matrix .cell-issued{color:var(--good);font-weight:700}
-  table.matrix .cell-some{color:var(--warn);font-weight:700}
-  table.matrix .cell-none{color:var(--ink3)}
-  table.matrix .cell-paid{color:var(--paid);font-weight:700}
-
-  .corp .cpaid{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px}
-  .corp .cpaid .diff{color:var(--bad);font-weight:700}
-  .corp .cpaid .ok{color:var(--good);font-weight:700}
-
-  .banner{border-radius:var(--radius);padding:14px 16px;margin-bottom:14px;background:var(--accent-soft);border:1px solid #c9dbfb;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
-  .banner .big{font-size:18px;font-weight:800;color:var(--accent)}
-  .banner .note{font-size:12px;color:var(--ink2)}
-  .frow{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px}
-  .frow label{display:flex;flex-direction:column;font-size:12px;color:var(--ink2);gap:4px}
-  .frow select,.frow input{height:38px;border:1px solid var(--line);border-radius:8px;padding:0 10px;font-size:14px;background:#fff;min-width:150px}
-
-  table.entry{width:100%;border-collapse:collapse}
-  table.entry th,table.entry td{border-bottom:1px solid var(--line);padding:6px 6px;font-size:13px;text-align:left;vertical-align:middle}
-  table.entry th{color:var(--ink2);font-weight:600;font-size:12px;text-align:center;white-space:nowrap}
-  table.entry th.l,table.entry td.l{text-align:left}
-  table.entry th.c,table.entry td.c{text-align:center}
-  table.entry input,table.entry select{width:100%;height:34px;border:1px solid var(--line);border-radius:6px;padding:0 8px;font-size:13px;background:#fff}
-  table.entry select.f-kubun,table.entry select.f-tax{text-align:center;text-align-last:center}
-  table.entry input.amount{text-align:right;font-variant-numeric:tabular-nums}
-  table.entry td.num{text-align:right;font-variant-numeric:tabular-nums}
-  .rowdel{border:none;background:none;color:var(--ink3);font-size:16px;cursor:pointer}
-  .entry-actions{display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap}
-  .muted{color:var(--ink3);font-size:12px}
-  #perf-card{padding:10px 16px}
-  .perf-row{padding:2px 0;color:var(--ink2)}
-  .perf-row.warn{color:var(--bad);font-weight:700}
-  .existing h3{font-size:13px;color:var(--ink2);margin:14px 0 6px}
-  .kubun-tag{font-size:11px;padding:1px 7px;border-radius:4px;background:#eef0f4;color:var(--ink2);white-space:nowrap}
-
-  .modal-bg{position:fixed;inset:0;background:rgba(20,24,32,.5);display:none;align-items:center;justify-content:center;z-index:60;padding:16px}
-  .modal-bg.show{display:flex}
-  .modal{background:var(--card);border-radius:14px;max-width:880px;width:100%;max-height:92vh;display:flex;flex-direction:column;overflow:hidden}
-  .modal .mhead{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
-  .modal .mhead h3{font-size:15px;margin-right:auto}
-  .modal .mbody{padding:16px 18px;overflow-y:auto}
-  .modal .mfoot{display:flex;gap:10px;padding:12px 18px;border-top:1px solid var(--line);justify-content:flex-end;flex-wrap:wrap}
-  .mclose{border:none;background:none;font-size:20px;cursor:pointer;color:var(--ink3)}
-  .pdf-frame{width:100%;height:62vh;border:1px solid var(--line);border-radius:8px}
+  table.matrix th{background:#faf8f5;color:var(--muted);font-weight:600}
+  table.matrix td.store-name{text-align:left;font-weight:600;background:#faf8f5}
+  table.matrix td.sel,table.matrix th.sel{outline:2px solid var(--accent);outline-offset:-2px}
+  table.matrix .cell-issued{color:var(--green);font-weight:700}
+  table.matrix .cell-some{color:var(--amber);font-weight:700}
+  table.matrix .cell-none{color:#b7ada1}
+  table.matrix .cell-paid{color:#7155a2;font-weight:700}
   .chart-wrap{overflow-x:auto}
-  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-  .seg button{border:none;background:var(--card);padding:7px 14px;font-size:13px;cursor:pointer;color:var(--ink2);border-right:1px solid var(--line)}
-  .seg button:last-child{border-right:none}
-  .seg button.on{background:var(--accent);color:#fff;font-weight:700}
-  table.matrix td.num{text-align:right;font-variant-numeric:tabular-nums}
-  table.matrix tr.total-row td{font-weight:800;background:#f0f4fb}
-  table.entry input[type=file]{font-size:11px;padding:3px;height:auto}
-  .file-set{font-size:11px;color:var(--good)}
 
-  #login-view{max-width:360px;margin:10vh auto 0;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px}
-  #login-view h1{font-size:18px;margin-bottom:4px}
-  #login-view p{font-size:12px;color:var(--ink3);margin-bottom:18px}
-  #login-view label{display:block;font-size:12px;color:var(--ink2);margin-bottom:4px}
+  /* ===== ログイン画面 ===== */
+  #login-view{max-width:360px;margin:10vh auto 0;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:28px;box-shadow:var(--shadow)}
+  #login-view h1{font-size:19px;margin-bottom:4px}
+  #login-view p{font-size:12px;color:var(--muted);margin-bottom:18px}
+  #login-view label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
   #login-view input{width:100%;height:42px;border:1px solid var(--line);border-radius:8px;padding:0 12px;font-size:15px;margin-bottom:14px}
   #login-view button{width:100%;height:44px;border:none;border-radius:8px;background:var(--accent);color:#fff;font-size:15px;font-weight:700;cursor:pointer}
-  #login-err{color:var(--bad);font-size:12px;margin-bottom:10px;min-height:16px}
+  #login-err{color:var(--accent);font-size:12px;margin-bottom:10px;min-height:16px}
 
-  #toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#222;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .25s;pointer-events:none;max-width:90%;z-index:80}
+  #toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#211d18;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .25s;pointer-events:none;max-width:90%;z-index:90}
   #toast.show{opacity:.95}
-  #loading{position:fixed;inset:0;background:rgba(255,255,255,.6);display:none;align-items:center;justify-content:center;z-index:70;font-weight:700;color:var(--ink2)}
+  #loading{position:fixed;inset:0;background:rgba(255,255,255,.6);display:none;align-items:center;justify-content:center;z-index:85;font-weight:700;color:var(--muted)}
   #loading.show{display:flex}
   .spin{width:18px;height:18px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;margin-right:10px;animation:sp 1s linear infinite}
   @keyframes sp{to{transform:rotate(360deg)}}
+
   @media (max-width:640px){
     .wrap{padding:10px 10px 56px}
-    .stores{grid-template-columns:1fr}
-    header.app{padding:10px 0;gap:8px}
+    header.app{padding:8px 0;gap:8px}
     header.app h1{font-size:16px;width:100%;margin-right:0}
-    header.app .whoami{font-size:11px}
-    .tabs{gap:6px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;padding-bottom:2px}
-    .tabs button{padding:8px 14px;font-size:13px;white-space:nowrap}
-    .toolbar .btn{flex:1 1 auto;font-size:12px;padding:8px 8px}
-    .monthbar select{flex:1;min-width:0}
-    .frow{gap:8px}
-    .frow label{flex:1 1 100%}
-    .frow select,.frow input{min-width:0;width:100%}
-    .modal{max-height:94vh}
-    .modal .mfoot{flex-direction:column-reverse}
-    .modal .mfoot .btn,.modal .mfoot a.btn{width:100%;text-align:center}
-    .pdf-frame{height:70vh}
-    .transfer-box .val{font-size:19px}
-    .store{padding:12px 13px}
-    table.entry th,table.entry td{font-size:12px;padding:5px 4px}
+    .settle-top-tabs{gap:6px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+    .settle-tab{padding:8px 14px;font-size:12px;white-space:nowrap}
+    .settle-actions{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+    .settle-month{flex:1;min-width:0}
+    .info-modalbox{width:100%;max-height:92vh}
     #login-view{margin:6vh auto 0;padding:22px 18px}
-    /* スマホでは横長テーブルはスクロール前提。指で横スクロールできる表示に */
-    .matrix-scroll{-webkit-overflow-scrolling:touch}
   }
 </style>
 </head>
@@ -222,15 +176,15 @@
   <label>パスワード</label>
   <input id="login-pw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
   <button onclick="doLogin()">ログイン</button>
-  <div id="sso-box" style="margin-top:18px;border-top:1px solid #ddd;padding-top:14px">
-    <button id="sso-open" onclick="ssoToggle()" style="background:transparent;color:#666;border:1px dashed #aaa">🐔 統合アカウント（ポータル/日報）でログイン</button>
+  <div id="sso-box" style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
+    <button id="sso-open" onclick="ssoToggle()" style="background:transparent;color:var(--muted);border:1px dashed var(--line)">🐔 統合アカウント（ポータル/日報）でログイン</button>
     <div id="sso-form" style="display:none">
       <label>統合アカウントのメールアドレス</label>
       <input id="sso-email" type="email" autocomplete="username" placeholder="ポータル/日報と同じメール">
       <label>パスワード</label>
       <input id="sso-pw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doSsoLogin()">
       <button onclick="doSsoLogin()">🐔 統合アカウントでログイン</button>
-      <p class="muted" style="font-size:12px;margin-top:8px">※ 業務委託先の方は上のIDとパスワードでログインしてください。</p>
+      <p class="muted" style="margin-top:8px">※ 業務委託先の方は上のIDとパスワードでログインしてください。</p>
     </div>
   </div>
 </div>
@@ -245,154 +199,155 @@
     <div class="sub" id="updated-at"></div>
   </header>
 
-  <div class="card" id="perf-card">
-    <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="var b=document.getElementById('perf-panel');b.style.display=b.style.display==='none'?'':'none';">
-      <b style="font-size:13px">⏱ 処理速度ログ</b>
-      <span class="muted" style="font-size:11px">（登録・修正・削除・添付のたびに、サーバー時間と再読込を含めた合計をここに記録します。クリックで開閉）</span>
+  <div class="settle-shell">
+    <div class="settle-log" id="settleLog">
+      <div class="settle-log-head" onclick="document.getElementById('settleLog').classList.toggle('open')">
+        <div><b>⏱ 処理速度ログ</b> <small>登録・修正・削除・添付のたびに、サーバー時間と再読込を含めた合計をここに記録します。クリックで開閉</small></div><span>⌄</span>
+      </div>
+      <div class="settle-log-body" id="perf-panel"></div>
     </div>
-    <div id="perf-panel" style="margin-top:8px;font-size:12px;font-family:monospace;line-height:1.8"></div>
-  </div>
 
-  <div class="tabs" id="tabs">
-    <button id="tab-check" class="on" onclick="showView('check')">✅ 店舗チェック</button>
-    <button id="tab-corp" onclick="showView('corp')">🏢 法人別・振込</button>
-    <button id="tab-annual" onclick="showView('annual')">📊 年間推移</button>
-    <button id="tab-input" onclick="showView('input')" style="display:none">＋ 明細を入力</button>
-    <button id="tab-settings" onclick="showView('settings')" style="display:none">⚙️ 設定</button>
-  </div>
-
-  <div class="monthbar">
-    <button onclick="shiftMonth(-1)" title="前の月">‹</button>
-    <select id="month-select" onchange="loadDashboard(this.value)"></select>
-    <button onclick="shiftMonth(1)" title="次の月">›</button>
-    <span class="spacer"></span>
-    <button class="reload" onclick="loadDashboard(state.month,true)">↻ 再読込</button>
-  </div>
-
-  <div class="toolbar" id="honbu-toolbar" style="display:none">
-    <button class="btn ghost" onclick="openCashModal()">💴 現金売上を取込</button>
-    <button class="btn ghost" onclick="prepareMonth()">🔁 定期費目をセット</button>
-    <button class="btn ghost" onclick="openBulkModal()">📅 先の月へ一括計上</button>
-    <button class="btn" onclick="setupAutoPrep()">🕘 毎月の自動処理をON</button>
-    <button class="btn" onclick="writeCheckSheet()">📄 チェック表をシートに書き出す</button>
-  </div>
-
-  <!-- 店舗チェック -->
-  <div id="view-check">
-    <div class="stores" id="store-cards"></div>
-    <div class="card" style="margin-top:14px">
-      <h2>店舗 × 月　入力状況</h2>
-      <div class="matrix-scroll"><table class="matrix" id="matrix"></table></div>
-      <p class="muted" style="margin-top:8px">💰=振込済み ／ ✓=発行済み ／ 数字=明細件数 ／ －=未入力。枠線の列が選択中の月です。</p>
+    <div class="settle-top-tabs" id="tabs">
+      <button id="tab-check" class="settle-tab active" onclick="showView('check')">✅ 店舗チェック</button>
+      <button id="tab-corp" class="settle-tab" onclick="showView('corp')">🏢 法人別・振込</button>
+      <button id="tab-annual" class="settle-tab" onclick="showView('annual')">📊 年間推移</button>
+      <button id="tab-input" class="settle-tab" onclick="showView('input')" style="display:none">＋ 明細を入力</button>
+      <button id="tab-settings" class="settle-tab" onclick="showView('settings')" style="display:none">⚙ 設定</button>
     </div>
-  </div>
 
-  <!-- 法人別 -->
-  <div id="view-corp" style="display:none">
-    <div id="corp-cards"></div>
-    <p class="muted">※ 振込先口座は「設定」タブ、または「法人設定_精算ダッシュボード」シートで登録できます。振込金額は売上入力済みの店舗のみ合計しています。</p>
-  </div>
+    <div class="settle-monthbar">
+      <div class="settle-monthleft">
+        <button class="btn" onclick="shiftMonth(-1)" title="前の月">‹</button>
+        <select class="settle-month" id="month-select" onchange="loadDashboard(this.value)"></select>
+        <button class="btn" onclick="shiftMonth(1)" title="次の月">›</button>
+      </div>
+      <div class="settle-monthright"><button class="btn" onclick="loadDashboard(state.month,true)">↻ 再読込</button></div>
+    </div>
 
-  <!-- 年間推移 -->
-  <div id="view-annual" style="display:none">
-    <div class="card">
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-        <h2 style="margin:0">📊 年間推移（店舗 × 月）</h2>
-        <span style="flex:1"></span>
-        <div class="seg" id="annual-metric">
-          <button class="on" data-metric="sales" onclick="setAnnualMetric('sales')">売上</button>
-          <button data-metric="transfer" onclick="setAnnualMetric('transfer')">振込金額</button>
-          <button data-metric="ns" onclick="setAnnualMetric('ns')">N-style収益</button>
+    <div class="settle-actions" id="honbu-toolbar" style="display:none">
+      <button class="settle-action" onclick="openCashModal()">💵 現金売上を取込</button>
+      <button class="settle-action" onclick="prepareMonth()">🔁 定期費目をセット</button>
+      <button class="settle-action" onclick="openBulkModal()">📅 先の月へ一括計上</button>
+      <button class="settle-action neutral" onclick="setupAutoPrep()">🕘 毎月の自動処理をON</button>
+      <button class="settle-action neutral" onclick="writeCheckSheet()">📄 チェック表をシートに書き出す</button>
+    </div>
+
+    <!-- 店舗チェック -->
+    <div id="view-check" class="settle-subpage active">
+      <div class="settle-summary" id="check-kpis"></div>
+      <div class="settle-storegrid" id="store-cards"></div>
+      <div class="settle-yearcard" style="margin-top:14px">
+        <div class="settle-yearhead"><div><b>店舗 × 月　入力状況</b><div class="muted" style="margin-top:2px">💰=振込済み ／ ✓=発行済み ／ 数字=明細件数 ／ －=未入力。枠線の列が選択中の月です。</div></div></div>
+        <div class="matrix-scroll" style="padding:14px"><table class="matrix" id="matrix"></table></div>
+      </div>
+    </div>
+
+    <!-- 法人別 -->
+    <div id="view-corp" class="settle-subpage">
+      <div id="corp-cards"></div>
+      <p class="muted">※ 振込先口座は「設定」タブ、または「法人設定_精算ダッシュボード」シートで登録できます。振込金額は売上入力済みの店舗のみ合計しています。</p>
+    </div>
+
+    <!-- 年間推移 -->
+    <div id="view-annual" class="settle-subpage">
+      <div class="settle-yearcard">
+        <div class="settle-yearhead">
+          <div><b>📊 年間推移（店舗 × 月）</b><div class="muted" style="margin-top:2px">店舗ごとの月次推移を横断比較</div></div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <div class="settle-seg" id="annual-metric">
+              <button class="active" data-metric="sales" onclick="setAnnualMetric('sales')">売上</button>
+              <button data-metric="transfer" onclick="setAnnualMetric('transfer')">振込金額</button>
+              <button data-metric="ns" onclick="setAnnualMetric('ns')">N-style収益</button>
+            </div>
+            <button class="btn sm" onclick="downloadAnnualCsv()">⬇ CSVダウンロード</button>
+          </div>
         </div>
-        <button class="btn sm" onclick="downloadAnnualCsv()">⬇ CSVダウンロード</button>
+        <div class="settle-tablewrap"><table class="settle-year-table" id="annual-table"></table></div>
+        <p class="muted" style="padding:10px 14px">売上が未入力の月は空欄です。行末は各店舗の年間合計、最下行は全店合計です。</p>
       </div>
-      <div class="matrix-scroll"><table class="matrix" id="annual-table"></table></div>
-      <p class="muted" style="margin-top:8px">売上が未入力の月は空欄です。行末は各店舗の年間合計、最下行は全店合計です。</p>
     </div>
-  </div>
 
-  <!-- 設定（本部のみ） -->
-  <div id="view-settings" style="display:none">
-    <div class="card">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <h2 style="margin:0">👤 ログインアカウント</h2>
-        <span style="flex:1"></span>
-        <button class="btn primary sm" onclick="openAccountModal()">＋ アカウントを追加</button>
-      </div>
-      <div class="matrix-scroll" style="margin-top:10px"><table class="corpt" id="acct-table"></table></div>
-      <p class="muted" style="margin-top:6px">委託先アカウントの「担当店舗」はカンマ区切りで複数指定できます。本部は全機能、委託先は担当店舗の閲覧のみです。</p>
-    </div>
-    <div class="card">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <h2 style="margin:0">🏢 法人（委託先）と振込先</h2>
-      </div>
-      <div class="matrix-scroll" style="margin-top:10px"><table class="corpt" id="corp-settings-table"></table></div>
-      <p class="muted" style="margin-top:6px">法人は店舗設定マスターの「委託先」から自動で一覧化されます。振込先口座を登録すると法人別タブと精算書に反映されます。</p>
-    </div>
-    <div class="card">
-      <h2 style="margin:0 0 8px">🏬 店舗マスタ</h2>
-      <div class="matrix-scroll"><table class="corpt" id="store-settings-table"></table></div>
-      <p class="muted" style="margin-top:6px">店舗の追加・ロイヤリティ率・家賃などの固定経費は、スプレッドシートの「店舗設定マスター」で編集します。<a class="plain" id="master-link" href="#" target="_blank" rel="noopener">店舗設定マスターを開く ↗</a></p>
-    </div>
-    <div class="card">
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-        <h2 style="margin:0">🔔 ChatWork連携（振込期限リマインド）</h2>
-        <span style="flex:1"></span>
-        <button class="btn primary sm" onclick="testChatwork()">📨 テスト送信</button>
-      </div>
-      <p class="muted" style="margin-top:6px">「設定_外部連携」シートの「ChatWork APIトークン」「ChatWorkルームID（振込リマインド用）」を設定した後、ここでテスト送信して届くか確認できます。</p>
-    </div>
-  </div>
-
-  <!-- 入力（本部のみ） -->
-  <div id="view-input" style="display:none">
-    <div class="banner">
-      <span>登録先:</span><span class="big" id="banner-month"></span>
-      <span class="big" id="banner-store"></span>
-      <span class="note">← 追加する明細はすべてこの「店舗・月」で登録されます。行ごとに月を書く必要はありません。</span>
-    </div>
-    <div class="lock-banner" id="input-lock-banner" style="display:none">🔒 この店舗・この月は振込済みのため編集ロック中です。変更するにはマスターアカウントでログインしてください。</div>
-    <div class="card">
-      <div class="frow">
-        <label>店舗
-          <select id="in-store" onchange="onStoreChange()"></select>
-        </label>
-        <label>対象月
-          <select id="in-month" onchange="onInMonthChange()"></select>
-        </label>
-        <label>入力者
-          <input id="in-editor" placeholder="例: 中山" oninput="localStorage.setItem('sd_editor',this.value)">
-        </label>
-      </div>
-      <div id="entry-card">
-        <table class="entry">
-          <thead>
-            <tr><th style="width:120px">区分</th><th>費目名</th><th style="width:120px">金額（税込）</th><th style="width:90px">税率</th><th>備考</th><th style="width:150px">📎 資料（任意）</th><th style="width:30px"></th></tr>
-          </thead>
-          <tbody id="entry-rows"></tbody>
-        </table>
-        <div class="entry-actions">
-          <button class="btn" onclick="addEntryRow()">＋ 行を追加</button>
-          <span style="flex:1"></span>
-          <button class="btn primary" id="submit-btn" onclick="submitRows()">この内容で登録する</button>
+    <!-- 明細を入力（本部のみ） -->
+    <div id="view-input" class="settle-subpage">
+      <div class="settle-entry-banner">登録先: <b id="banner-month"></b>　／　<b id="banner-store"></b>　← 追加する明細はすべてこの「店舗・月」で登録されます。行ごとに月を書く必要はありません。</div>
+      <div class="settle-lock locked" id="input-lock-banner" style="display:none;margin-bottom:12px">🔒 この店舗・この月は振込済みのため編集ロック中です。変更するにはマスターアカウントでログインしてください。</div>
+      <div class="settle-entry-card">
+        <div class="settle-entry-top">
+          <div><label>店舗</label><select id="in-store" onchange="onStoreChange()"></select></div>
+          <div><label>対象月</label><select id="in-month" onchange="onInMonthChange()"></select></div>
+          <div><label>入力者</label><input id="in-editor" placeholder="例: 中山" oninput="localStorage.setItem('sd_editor',this.value)"></div>
+        </div>
+        <div id="entry-card">
+          <div class="settle-form-head"><div>区分</div><div>費目名</div><div>金額（税込）</div><div>税率</div><div>備考</div><div>📎資料</div><div></div></div>
+          <div id="entry-rows"></div>
+          <div class="settle-entry-actions">
+            <button class="btn" onclick="addEntryRow()">＋ 行を追加</button>
+            <button class="btn primary" id="submit-btn" onclick="submitRows()">この内容で登録する</button>
+          </div>
+        </div>
+        <p class="muted" style="margin-top:10px">マイナス金額（返金・調整）も入力できます。各行にファイルを添付すると、登録時に「費目名_年.月_店舗名」に自動リネームしてDriveに保存します。</p>
+        <div class="existing" style="margin-top:18px">
+          <div style="font-size:12px;font-weight:700;color:var(--muted)" id="existing-title"></div>
+          <div class="settle-tablewrap" style="margin-top:8px"><table class="settle-table" id="existing-table"></table></div>
+          <div id="existing-miss" style="margin-top:10px"></div>
         </div>
       </div>
-      <p class="muted">マイナス金額（返金・調整）も入力できます。各行にファイルを添付すると、登録時に「費目名_年.月_店舗名」に自動リネームしてDriveに保存します。</p>
-      <div class="existing">
-        <h3 id="existing-title"></h3>
-        <div class="matrix-scroll"><table class="entry" id="existing-table"></table></div>
-        <div id="existing-miss" style="margin-top:10px"></div>
+    </div>
+
+    <!-- 設定（本部のみ） -->
+    <div id="view-settings" class="settle-subpage">
+      <div class="settle-setting-grid">
+        <div class="settle-setting">
+          <h3>🏦 振込先口座</h3><p>法人ごとの振込先を設定</p>
+          <div id="corp-settings-list"></div>
+        </div>
+        <div class="settle-setting">
+          <h3>💹 ロイヤリティ設定</h3><p>店舗単位の変動ロイヤリティ率（変更すると即保存されます）</p>
+          <div id="rate-settings-list"></div>
+        </div>
+        <div class="settle-setting">
+          <h3>🔁 定期費目</h3><p>毎月自動で作る費目（「毎月」⇄「停止」の切替が即保存されます）</p>
+          <div id="recur-settings-list"></div>
+        </div>
+        <div class="settle-setting">
+          <h3>⚙ 自動処理・権限</h3><p>締め・ロック・メール送信の既定</p>
+          <div class="settle-setting-row"><strong>毎月の自動処理</strong><span class="muted">上のツールバーの「🕘 毎月の自動処理をON」で設定します</span></div>
+          <div class="settle-setting-row"><strong>振込済み後の編集</strong><select id="ops-lock-level" onchange="saveOpsSettings()"><option value="master">マスターのみ</option><option value="admin">本部以上</option></select></div>
+          <div class="settle-setting-row"><strong>発行モーダルの送信の既定</strong><select id="ops-autosend-mode" onchange="saveOpsSettings()"><option value="manual">送信チェックを毎回選ぶ</option><option value="auto">送信チェック済みにしておく</option></select></div>
+          <p class="muted" id="ops-master-note" style="margin-top:8px;display:none">※ この設定の変更にはマスターアカウントが必要です</p>
+        </div>
+      </div>
+
+      <div class="settle-setting" style="margin-top:12px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <h3 style="margin:0">👤 ログインアカウント</h3><span style="flex:1"></span>
+          <button class="btn primary sm" onclick="openAccountModal()">＋ アカウントを追加</button>
+        </div>
+        <div class="settle-tablewrap" style="margin-top:10px"><table class="settle-table" id="acct-table"></table></div>
+        <p class="muted" style="margin-top:6px">委託先アカウントの「担当店舗」はカンマ区切りで複数指定できます。本部は全機能、委託先は担当店舗の閲覧のみです。</p>
+      </div>
+      <div class="settle-setting" style="margin-top:12px">
+        <h3>🏬 店舗マスタ</h3><p>店舗の追加・家賃などの固定経費</p>
+        <div class="settle-tablewrap"><table class="settle-table" id="store-settings-table"></table></div>
+        <p class="muted" style="margin-top:6px">店舗の追加・家賃などの固定経費は、スプレッドシートの「店舗設定マスター」で編集します。<a class="plain" id="master-link" href="#" target="_blank" rel="noopener">店舗設定マスターを開く ↗</a></p>
+      </div>
+      <div class="settle-setting" style="margin-top:12px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <h3 style="margin:0">🔔 ChatWork連携（振込期限リマインド）</h3><span style="flex:1"></span>
+          <button class="btn primary sm" onclick="testChatwork()">📨 テスト送信</button>
+        </div>
+        <p class="muted" style="margin-top:6px">「設定_外部連携」シートの「ChatWork APIトークン」「ChatWorkルームID（振込リマインド用）」を設定した後、ここでテスト送信して届くか確認できます。</p>
       </div>
     </div>
   </div>
 </div>
 
 <!-- 汎用モーダル -->
-<div class="modal-bg" id="modal-bg" onclick="if(event.target===this)closeModal()">
-  <div class="modal">
-    <div class="mhead"><h3 id="modal-title"></h3><button class="mclose" onclick="closeModal()">✕</button></div>
-    <div class="mbody" id="modal-body"></div>
-    <div class="mfoot" id="modal-foot"></div>
+<div class="info-modal" id="modal-bg" onclick="if(event.target===this)closeModal()">
+  <div class="info-modalbox">
+    <div class="info-modalhead"><span id="modal-title"></span><button class="btn" onclick="closeModal()">×</button></div>
+    <div class="info-modalbody" id="modal-body"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;padding:0 17px 17px" id="modal-foot"></div>
   </div>
 </div>
 
@@ -592,10 +547,10 @@ function perfOpEnd(){
 function renderPerfPanel(){
   var el = document.getElementById('perf-panel');
   if(!el) return;
-  if(!perfHistory.length){ el.innerHTML='<span class="muted">まだ計測データがありません（明細の登録・修正・削除・添付を行うとここに表示されます）</span>'; return; }
+  if(!perfHistory.length){ el.innerHTML='<div class="muted" style="padding:8px 0">まだ計測データがありません（明細の登録・修正・削除・添付を行うとここに表示されます）</div>'; return; }
   el.innerHTML = perfHistory.map(function(h){
     var warn = h.total>=6000;
-    return '<div class="perf-row'+(warn?' warn':'')+'">'+h.time+'　<b>'+esc(h.label)+'</b>　'+esc(h.line)+'　＝<b>合計'+(h.total/1000).toFixed(1)+'秒</b></div>';
+    return '<div style="padding:4px 0'+(warn?';color:#c0392b;font-weight:700':'')+'">'+h.time+'　<b>'+esc(h.label)+'</b>　'+esc(h.line)+'　＝<b>合計'+(h.total/1000).toFixed(1)+'秒</b></div>';
   }).join('');
 }
 /* 速度計測: サーバー内訳(_ms)と往復時間を計測してconsoleに出し、短い要約文字列を返す。
@@ -734,9 +689,9 @@ function doSsoLogin(){
 function showView(v){
   ['check','corp','annual','input','settings'].forEach(function(k){
     var vw=document.getElementById('view-'+k);
-    if(vw) vw.style.display = v===k?'':'none';
+    if(vw) vw.classList.toggle('active', v===k);
     var tb=document.getElementById('tab-'+k);
-    if(tb) tb.classList.toggle('on',v===k);
+    if(tb) tb.classList.toggle('active',v===k);
   });
   if(v==='annual') renderAnnual();
   if(v==='settings') loadSettings();
@@ -796,16 +751,41 @@ function render(){
   document.getElementById('honbu-toolbar').style.display = honbu?'':'none';
   if(!honbu){
     var vi=document.getElementById('view-input'), vs=document.getElementById('view-settings');
-    if((vi&&vi.style.display!=='none')||(vs&&vs.style.display!=='none')) showView('check');
+    if(vi.classList.contains('active')||vs.classList.contains('active')) showView('check');
   }
 
   var sel=document.getElementById('month-select');
   sel.innerHTML=d.months.map(function(mk){ return '<option value="'+mk+'"'+(mk===d.month?' selected':'')+'>'+mLabel(mk)+'</option>'; }).join('');
+  renderKpis();
   renderCards();
   renderCorp();
   renderMatrix();
-  if(document.getElementById('view-annual').style.display!=='none') renderAnnual();
+  if(document.getElementById('view-annual').classList.contains('active')) renderAnnual();
   if(honbu) renderInputView();
+}
+
+/* ---- 店舗チェックタブ冒頭のKPIサマリー（モックの.settle-summary。フロント側で集計するだけ・新規バックエンド不要） ---- */
+function renderKpis(){
+  var d=state.data;
+  var total=d.stores.length;
+  var paidCount=0, diffCount=0, missCount=0, transferSum=0;
+  d.stores.forEach(function(st){
+    var dt=st.detail, se=dt.settle;
+    if(dt.paid && dt.paid.done) paidCount++;
+    if(dt.salesCheck && dt.salesCheck.diff) diffCount++;
+    missCount += (dt.missing?dt.missing.length:0) + (dt.catWarn?dt.catWarn.length:0);
+    if(se.hasSales) transferSum += se.transfer;
+  });
+  var kpis=[
+    {label:'対象店舗', val:total+'店舗', sub:d.monthLabel},
+    {label:'振込済み', val:paidCount+' / '+total, sub:paidCount===total?'全店舗処理済み':'未処理あり'},
+    {label:'売上照合差異', val:diffCount+'店舗', sub:diffCount?'要確認':'差異なし', warn:!!diffCount},
+    {label:'入力漏れ疑い', val:missCount+'件', sub:'直近3ヶ月比較', warn:!!missCount},
+    {label:'振込合計', val:man(transferSum)+'円', sub:'税込'}
+  ];
+  document.getElementById('check-kpis').innerHTML = kpis.map(function(k){
+    return '<div class="settle-kpi"><small>'+esc(k.label)+'</small><b'+(k.warn?' style="color:var(--s-amber)"':'')+'>'+esc(k.val)+'</b><div class="sub">'+esc(k.sub)+'</div></div>';
+  }).join('');
 }
 
 /* 振込・差額は法人（委託先）単位で管理する。店舗単体の額とは比較できないため、
@@ -813,31 +793,31 @@ function render(){
 function statusOf(st){
   var dt=st.detail;
   if (dt.paid && dt.paid.done) return {cls:'paid', label:'💰 振込済み '+(dt.paid.date||'')};
-  if (dt.issuedThis) return {cls:'good', label:'✅ 発行済み'};
-  if (dt.count>0)    return {cls:'warn', label:'🟡 入力中 '+dt.count+'件'};
-  return {cls:'bad', label:'❌ 未入力'};
+  if (dt.issuedThis) return {cls:'green', label:'✅ 発行済み'};
+  if (dt.count>0)    return {cls:'amber', label:'🟡 入力中 '+dt.count+'件'};
+  return {cls:'red', label:'❌ 未入力'};
 }
 
-/* ---- 精算内訳テーブル ---- */
+/* ---- 精算内訳テーブル（内訳 ▾ で開閉） ---- */
 function settleTable(st){
   var s=st.detail.settle, f=st.fixed||{};
   var rows='';
-  rows+='<tr class="sec"><td>売上（預かり金）</td><td class="num">'+yen(s.sales)+'</td></tr>';
-  rows+='<tr class="sec"><td>固定経費（店舗設定マスターから自動）</td><td class="num">'+yen(s.fixedSub)+'</td></tr>';
-  if(f.rent) rows+='<tr><td class="ind">家賃</td><td class="num">'+yen(f.rent)+'</td></tr>';
-  if(f.ins)  rows+='<tr><td class="ind">物件保険</td><td class="num">'+yen(f.ins)+'</td></tr>';
-  if(f.sss)  rows+='<tr><td class="ind">SSS経理手数料</td><td class="num">'+yen(f.sss)+'</td></tr>';
-  if(f.f4)   rows+='<tr><td class="ind">固定④</td><td class="num">'+yen(f.f4)+'</td></tr>';
-  if(f.f5)   rows+='<tr><td class="ind">固定⑤</td><td class="num">'+yen(f.f5)+'</td></tr>';
-  if(s.adj)  rows+='<tr><td class="ind">固定調整（DB入力）</td><td class="num">'+yen(s.adj)+'</td></tr>';
-  rows+='<tr class="sec"><td>変動費（DB入力合計）</td><td class="num">'+yen(s.varCost)+'</td></tr>';
-  rows+='<tr class="sec"><td>ロイヤリティ 固定</td><td class="num">'+yen(s.royF)+'</td></tr>';
-  rows+='<tr class="sec"><td>ロイヤリティ 変動（売上 × '+esc(st.rate)+'）</td><td class="num">'+yen(s.royV)+'</td></tr>';
-  if(s.royVarDb) rows+='<tr><td class="ind">※ DBに変動ロイヤリティ入力あり（参考・計算には売上×率を使用）</td><td class="num">'+yen(s.royVarDb)+'</td></tr>';
-  rows+='<tr class="sec"><td>経費合計</td><td class="num">'+yen(s.costTotal)+'</td></tr>';
-  rows+='<tr class="total"><td>振込金額（税込）＝ 売上 − 経費合計</td><td class="num">'+yen(s.transfer)+'</td></tr>';
-  rows+='<tr><td class="ind">税抜 '+yen(s.transferEx)+' ／ 消費税 '+yen(s.tax)+'</td><td class="num muted">N-style収益 '+yen(s.ns)+'</td></tr>';
-  return '<table class="settle">'+rows+'</table>';
+  rows+='<tr><td><b>売上（預かり金）</b></td><td style="text-align:right">'+yen(s.sales)+'</td></tr>';
+  rows+='<tr><td><b>固定経費（店舗設定マスターから自動）</b></td><td style="text-align:right">'+yen(s.fixedSub)+'</td></tr>';
+  if(f.rent) rows+='<tr><td style="padding-left:16px">家賃</td><td style="text-align:right">'+yen(f.rent)+'</td></tr>';
+  if(f.ins)  rows+='<tr><td style="padding-left:16px">物件保険</td><td style="text-align:right">'+yen(f.ins)+'</td></tr>';
+  if(f.sss)  rows+='<tr><td style="padding-left:16px">SSS経理手数料</td><td style="text-align:right">'+yen(f.sss)+'</td></tr>';
+  if(f.f4)   rows+='<tr><td style="padding-left:16px">固定④</td><td style="text-align:right">'+yen(f.f4)+'</td></tr>';
+  if(f.f5)   rows+='<tr><td style="padding-left:16px">固定⑤</td><td style="text-align:right">'+yen(f.f5)+'</td></tr>';
+  if(s.adj)  rows+='<tr><td style="padding-left:16px">固定調整（DB入力）</td><td style="text-align:right">'+yen(s.adj)+'</td></tr>';
+  rows+='<tr><td><b>変動費（DB入力合計）</b></td><td style="text-align:right">'+yen(s.varCost)+'</td></tr>';
+  rows+='<tr><td><b>ロイヤリティ 固定</b></td><td style="text-align:right">'+yen(s.royF)+'</td></tr>';
+  rows+='<tr><td><b>ロイヤリティ 変動（売上 × '+esc(st.rate)+'）</b></td><td style="text-align:right">'+yen(s.royV)+'</td></tr>';
+  if(s.royVarDb) rows+='<tr><td style="padding-left:16px">※ DBに変動ロイヤリティ入力あり（参考・計算には売上×率を使用）</td><td style="text-align:right">'+yen(s.royVarDb)+'</td></tr>';
+  rows+='<tr><td><b>経費合計</b></td><td style="text-align:right">'+yen(s.costTotal)+'</td></tr>';
+  rows+='<tr style="font-weight:800"><td>振込金額（税込）＝ 売上 − 経費合計</td><td style="text-align:right">'+yen(s.transfer)+'</td></tr>';
+  rows+='<tr><td style="padding-left:16px" class="muted">税抜 '+yen(s.transferEx)+' ／ 消費税 '+yen(s.tax)+'</td><td style="text-align:right" class="muted">N-style収益 '+yen(s.ns)+'</td></tr>';
+  return '<div class="settle-tablewrap"><table class="settle-table">'+rows+'</table></div>';
 }
 
 function renderCards(){
@@ -846,62 +826,65 @@ function renderCards(){
     var s=statusOf(st), dt=st.detail, se=dt.settle;
     var transferHtml;
     if(se.hasSales){
-      transferHtml='<span class="lab">振込金額（税込）</span><span class="val'+(se.transfer<0?' neg':'')+'">'+yen(se.transfer)+'</span>';
+      transferHtml='<div><small>振込金額（税込）</small></div><b style="'+(se.transfer<0?'color:var(--accent)':'')+'">'+yen(se.transfer)+'</b>';
     } else {
-      transferHtml='<span class="lab">振込金額</span><span class="undet">売上未入力のため未確定</span>';
+      transferHtml='<div><small>振込金額</small></div><span class="undet">売上未入力のため未確定</span>';
     }
     var missHtml='';
     if (!st.hasDb){
-      missHtml='<div class="miss"><span class="mchip cat">⚠ DBシート未検出（設定シートで指定してください）</span></div>';
+      missHtml='<div class="settle-label">⚠ DBシート未検出（設定シートで指定してください）</div>';
     } else if (dt.missing.length || dt.catWarn.length){
-      missHtml='<div class="miss"><div class="t">⚠ 入力漏れの疑い（直近3ヶ月と比較）</div><div class="items">'
-        + dt.catWarn.map(function(m){return '<span class="mchip cat">'+esc(m)+'</span>';}).join('')
-        + dt.missing.map(function(m){return '<span class="mchip">'+esc(m)+'</span>';}).join('')
-        +'</div></div>';
+      missHtml='<div class="settle-label">⚠ 入力漏れの疑い（直近3ヶ月と比較）</div><div class="settle-chips">'
+        + dt.catWarn.map(function(m){return '<span class="settle-chip amber">'+esc(m)+'</span>';}).join('')
+        + dt.missing.map(function(m){return '<span class="settle-chip">'+esc(m)+'</span>';}).join('')
+        +'</div>';
     } else if (dt.count>0){
-      missHtml='<div class="miss"><span class="ok-note">✅ 直近月と比べて欠けている費目はありません</span></div>';
+      missHtml='<div class="settle-ok">✅ 直近月と比べて欠けている費目はありません</div>';
     }
-    var sentHtml = dt.sent ? '<div class="sent-note">📨 '+esc(dt.sent.action)+' '+esc(dt.sent.at)+(dt.sent.to?'（→ '+esc(dt.sent.to)+'）':'')+'</div>' : '';
+    var sentHtml = dt.sent ? '<div class="settle-meta">📨 '+esc(dt.sent.action)+' '+esc(dt.sent.at)+(dt.sent.to?'（→ '+esc(dt.sent.to)+'）':'')+'</div>' : '';
     var checkHtml = salesCheckHtml(dt.salesCheck);
     var locked = isLockedFor(st); // 振込済み＆マスター以外＝編集ロック
     var lockHtml = '';
     if(dt.locked){
       lockHtml = locked
-        ? '<div class="lockline">🔒 振込済みのため編集ロック中（変更にはマスターアカウントが必要です）</div>'
-        : '<div class="lockline master">🔓 振込済み（マスター権限のため編集できます）</div>';
+        ? '<div class="settle-lock locked">🔒 振込済みのため編集ロック中（変更にはマスターアカウントが必要です）</div>'
+        : '<div class="settle-lock">🔓 振込済み（マスター権限のため編集できます）</div>';
     }
     // 振込済み・振込金額の登録は法人（委託先）単位でまとめて行う（「法人別・振込」タブ参照）。ここは状態表示のみ。
     var paidHtml = '';
     if (dt.paid && dt.paid.done){
-      paidHtml = '<div class="paidline">💰 振込済み（'+esc(dt.paid.date)+' '+esc(dt.paid.by)+'）</div>';
+      paidHtml = '<div class="settle-meta">💰 振込済み（'+esc(dt.paid.date)+' '+esc(dt.paid.by)+'）</div>';
     } else if (honbu){
-      paidHtml = '<div class="paidline muted">振込済みの登録は「🏢 法人別・振込」タブでまとめて行います</div>';
+      paidHtml = '<div class="settle-meta">振込済みの登録は「🏢 法人別・振込」タブでまとめて行います</div>';
     }
-    var actions='';
+    var nm = esc(st.name).replace(/'/g,"\\'");
+    var actions='<button class="btn" onclick="openSettlementPreviewStore('+idx+')">👁 精算書プレビュー</button>';
     if(honbu){
-      actions=(locked
-          ? '<button class="btn ghost sm" disabled title="振込済みのためロック中">＋ 入力</button>'
-          : '<button class="btn ghost sm" onclick="gotoInput('+idx+')">＋ 入力</button>')
-        +'<button class="btn sm" onclick="pdfPreview('+idx+')">📄 プレビュー</button>'
-        +'<button class="btn primary sm" onclick="issueSend('+idx+')">✉️ 発行して送信</button>'
+      actions += (locked
+          ? '<button class="btn" disabled title="振込済みのためロック中">＋ 入力</button>'
+          : '<button class="btn" onclick="gotoInput('+idx+')">＋ 入力</button>')
+        +'<button class="btn primary" onclick="issueOnly('+idx+')">📄 PDF発行</button>'
+        +'<button class="btn mail" onclick="issueSend('+idx+')">✉ メール送信</button>'
+        +'<button class="btn" onclick="openSettlementHistory('+idx+')">🕘 送信履歴</button>'
         +(locked
-          ? '<button class="btn sm" onclick="openAttach('+idx+')">📎 添付を見る</button>'
-          : '<button class="btn sm" onclick="openAttach('+idx+')">📎 添付</button>')
-        +'<button class="btn sm" onclick="openTrend('+idx+')">📈 推移</button>';
+          ? '<button class="btn" onclick="openAttach('+idx+')">📎 添付を見る</button>'
+          : '<button class="btn" onclick="openAttach('+idx+')">📎 添付</button>')
+        +'<button class="btn" onclick="openTrend('+idx+')">📈 推移</button>';
     } else {
-      actions='<button class="btn sm" onclick="pdfPreview('+idx+')">📄 精算書を見る</button>'
-        +'<button class="btn sm" onclick="openAttach('+idx+')">📎 添付書類</button>'
-        +'<button class="btn sm" onclick="openTrend('+idx+')">📈 推移</button>';
+      actions += '<button class="btn" onclick="openAttach('+idx+')">📎 添付書類</button>'
+        +'<button class="btn" onclick="openTrend('+idx+')">📈 推移</button>';
     }
-    return '<div class="store">'
-      +'<div class="top"><div><div class="name">'+esc(st.name)+'</div><div class="client">'+esc(st.client)+'　変動ロイヤリティ '+esc(st.rate)+'</div></div>'
-      +'<span class="chip '+s.cls+'">'+s.label+'</span></div>'
-      +'<div class="transfer-box">'+transferHtml
+    var sendline = (honbu && dt.sent) ? '<div class="settle-sendline"><div><strong>✉ 送信済み</strong> '+esc(dt.sent.at)+(dt.sent.to?' / '+esc(dt.sent.to):'')+'</div><button class="btn sm" onclick="issueSend('+idx+')">再送信</button></div>' : '';
+    return '<div class="settle-storecard">'
+      +'<div class="settle-storehead"><div><h3>'+esc(st.name)+'</h3><p>'+esc(st.client)+'　変動ロイヤリティ '+esc(st.rate)+'</p></div>'
+      +'<span class="pill '+s.cls+'">'+s.label+'</span></div>'
+      +'<div class="settle-amount">'+transferHtml
       +'<button class="toggle" onclick="var p=document.getElementById(\'sdt-'+idx+'\');p.style.display=p.style.display===\'none\'?\'\':\'none\'">内訳 ▾</button></div>'
       +'<div id="sdt-'+idx+'" style="display:none">'+settleTable(st)+'</div>'
-      +'<div class="nums"><span>売上合計<b>'+yen(dt.sales)+'</b></span><span>経費合計<b>'+yen(se.costTotal)+'</b></span><span>明細<b>'+dt.count+'件</b></span></div>'
+      +'<div class="settle-minigrid"><div class="settle-mini"><small>売上合計</small><b>'+yen(dt.sales)+'</b></div><div class="settle-mini"><small>経費合計</small><b>'+yen(se.costTotal)+'</b></div><div class="settle-mini"><small>明細</small><b>'+dt.count+'件</b></div></div>'
       + missHtml + checkHtml + sentHtml + lockHtml + paidHtml
-      +'<div class="actions">'+actions+'</div>'
+      +'<div class="settle-doc-actions">'+actions+'</div>'
+      + sendline
       +'</div>';
   }).join('');
 }
@@ -911,14 +894,13 @@ function salesCheckHtml(sc){
   if(!sc) return '';
   var diff = sc.diff; // entered - source
   if(diff===0){
-    return '<div class="salescheck ok">✅ 売上照合 一致（売上シート '+yen(sc.source)+'）</div>';
+    return '<div class="settle-ok">✅ 売上照合 一致（売上シート '+yen(sc.source)+'）</div>';
   }
   var absd = Math.abs(diff);
   var dir = diff>0 ? '精算書が多い' : '精算書が少ない（入力漏れの可能性）';
   var sign = diff>0 ? '＋' : '−';
-  return '<div class="salescheck warn">⚠ 売上照合 差額 '+sign+yen(absd)
-    +'<div class="sc-detail">精算書 '+yen(sc.entered)+' ／ 売上シート '+yen(sc.source)+'　（'+dir+'）</div>'
-    +'<div class="sc-note">※ カード売上の翌月繰越などで差が出ることがあります。指標としてご確認ください。</div></div>';
+  return '<div class="settle-alert"><b>⚠ 売上照合 差額 '+sign+yen(absd)+'</b>精算書 '+yen(sc.entered)+' ／ 売上シート '+yen(sc.source)+'（'+dir+'）'
+    +'<div class="muted" style="margin-top:2px">※ カード売上の翌月繰越などで差が出ることがあります。指標としてご確認ください。</div></div>';
 }
 
 /* ---- 法人別 ---- */
@@ -941,9 +923,9 @@ function renderCorp(){
       if(se.hasSales) total+=se.transfer; else undet++;
       var s=statusOf(st);
       return '<tr><td>'+esc(st.name)+'</td>'
-        +'<td class="num">'+(se.hasSales?yen(se.transfer):'<span class="muted">未確定</span>')+'</td>'
-        +(honbu?'<td class="num muted">'+(se.hasSales?yen(se.ns):'－')+'</td>':'')
-        +'<td><span class="st-tag '+s.cls+'">'+s.label+'</span></td>'
+        +'<td style="text-align:right">'+(se.hasSales?yen(se.transfer):'<span class="muted">未確定</span>')+'</td>'
+        +(honbu?'<td style="text-align:right" class="muted">'+(se.hasSales?yen(se.ns):'－')+'</td>':'')
+        +'<td><span class="settle-badge '+(s.cls==='paid'?'paid':s.cls==='green'?'ok':s.cls==='amber'?'warn':'bad')+'">'+s.label+'</span></td>'
         +'<td>'+(dt.sent?'📨 '+esc(dt.sent.at):'－')+'</td></tr>';
     }).join('');
     // 同じ法人配下の店舗は全員同じ振込状態を共有している（バックエンドが法人単位で記録するため）
@@ -952,27 +934,32 @@ function renderCorp(){
     var paidTotal = (paid && paid.total) || 0;
     var diff = paidDone ? (total - paidTotal) : null;
     var acctHtml = corp && corp.account
-      ? '<div class="account">🏦 振込先: '+esc(corp.account)+(corp.note?'　<span class="muted">'+esc(corp.note)+'</span>':'')+'</div>'
-      : (honbu?'<div class="account missing">🏦 振込先口座が未登録です → 「設定」タブで登録してください</div>':'');
+      ? '<div class="muted" style="margin:8px 0">🏦 振込先: '+esc(corp.account)+(corp.note?'　'+esc(corp.note):'')+'</div>'
+      : (honbu?'<div class="settle-warning">🏦 振込先口座が未登録です → 「設定」タブで登録してください</div>':'');
     var cbDisabled = (paidDone && !isMaster()) ? ' disabled title="解除にはマスターアカウントが必要です"' : '';
     var payHtml;
     if (honbu){
-      payHtml = '<label class="cpaid"><input type="checkbox" '+(paidDone?'checked':'')+cbDisabled+' onchange="toggleCorpPaid('+idxs[0]+',this)"> <b>振込済みにする（法人単位）</b>'
-        + (paidDone?'（'+esc(paid.date)+' '+esc(paid.by)+'　振込済み累計 '+yen(paidTotal)+'）':'') + '</label>'
+      payHtml = '<label style="font-size:10px;font-weight:700;display:block;margin:8px 0"><input type="checkbox" '+(paidDone?'checked':'')+cbDisabled+' onchange="toggleCorpPaid('+idxs[0]+',this)"> 振込済みにする（法人単位）'
+        + (paidDone?'　<span style="font-weight:400">'+esc(paid.date)+' '+esc(paid.by)+'　振込済み累計 '+yen(paidTotal)+'</span>':'') + '</label>'
         + (paidDone ? (diff!==0
-            ? '<div class="cpaid"><span class="diff">⚠ 精算金額合計との差額 '+yen(diff)+'</span></div>'
-            : '<div class="cpaid"><span class="ok">✅ 差額なし（精算金額合計と一致）</span></div>') : '');
+            ? '<div style="margin:8px 0;color:var(--accent);font-size:10px;font-weight:700">⚠ 精算金額合計との差額 '+yen(diff)+'</div>'
+            : '<div style="margin:8px 0;color:var(--s-green);font-size:10px;font-weight:700">✅ 差額なし（精算金額合計と一致）</div>') : '');
     } else {
       payHtml = paidDone
-        ? '<div class="cpaid">💰 振込済み（'+esc(paid.date)+'）'+(diff!==0?'　<span class="diff">⚠ 差額 '+yen(diff)+'</span>':'')+'</div>'
+        ? '<div class="muted" style="margin:8px 0">💰 振込済み（'+esc(paid.date)+'）'+(diff!==0?'　<span style="color:var(--accent);font-weight:700">⚠ 差額 '+yen(diff)+'</span>':'')+'</div>'
         : '';
     }
-    return '<div class="corp">'
-      +'<div class="chead"><span class="cname">'+esc(client)+'</span><span class="muted">'+idxs.length+'店舗</span>'
-      +'<div class="csum"><div class="lab">'+esc(d.monthLabel)+'分 合計振込金額（税込）'+(undet?'　※未確定'+undet+'店舗を除く':'')+'</div><div class="val">'+yen(total)+'</div></div></div>'
+    var batchHtml = honbu ? '<div class="settle-batch-actions">'
+      +'<button class="btn" onclick="openSettlementBatchPreview(\''+esc(client).replace(/'/g,"\\'")+'\')">👁 '+idxs.length+'店舗一括プレビュー</button>'
+      +'<button class="btn primary" onclick="batchIssue(\''+esc(client).replace(/'/g,"\\'")+'\')">📄 PDF一括発行</button>'
+      +'<button class="btn mail" onclick="batchMail(\''+esc(client).replace(/'/g,"\\'")+'\')">✉ 一括メール送信</button>'
+      +'</div>' : '';
+    return '<div class="settle-corp">'
+      +'<div class="settle-corphead"><div><h3>'+esc(client)+' <small>'+idxs.length+'店舗</small></h3></div><div class="settle-corp-total"><small>'+esc(d.monthLabel)+'分 合計振込金額（税込）'+(undet?'　※未確定'+undet+'店舗を除く':'')+'</small><b>'+yen(total)+'</b></div></div>'
       + acctHtml
       + payHtml
-      +'<div class="matrix-scroll"><table class="corpt"><tr><th>店舗</th><th style="text-align:right">振込金額（税込）</th>'+(honbu?'<th style="text-align:right">N-style収益</th>':'')+'<th>状態</th><th>送信</th></tr>'+rows+'</table></div>'
+      + batchHtml
+      +'<div class="settle-tablewrap"><table class="settle-table"><tr><th>店舗</th><th style="text-align:right">振込金額（税込）</th>'+(honbu?'<th style="text-align:right">N-style収益</th>':'')+'<th>状態</th><th>送信</th></tr>'+rows+'</table></div>'
       +'</div>';
   }).join('');
 }
@@ -1007,7 +994,7 @@ function toggleCorpPaid(anyIdx, cb){
     + '<p id="paid-diff-preview" class="muted" style="margin-top:6px"></p>'
     + '<p class="muted" style="margin-top:8px">「メールも送信」を選ぶと、配下の各店舗のメール設定宛先に、それぞれの精算金額での振込完了のお知らせメールを送ります。</p>';
   openModal('💰 振込済みにする', body,
-    '<button class="btn primary" onclick="confirmCorpPaidFromModal(true)">✉️ 振込済みにしてメールも送信</button>'
+    '<button class="btn primary" onclick="confirmCorpPaidFromModal(true)">✉ 振込済みにしてメールも送信</button>'
     +'<button class="btn" onclick="confirmCorpPaidFromModal(false)">メールなしで振込済みに</button>'
     +'<button class="btn" onclick="closeModal();loadDashboard(state.month)">やめる</button>');
   updatePaidDiffPreview(total, prevTotal);
@@ -1020,8 +1007,8 @@ function updatePaidDiffPreview(transfer, prevTotal){
   var amt=Number(inp.value);
   if(inp.value===''||!isFinite(amt)){ el.textContent=''; return; }
   var diff = transfer - (prevTotal+amt);
-  if(diff===0) el.innerHTML='<span style="color:var(--good)">✅ 差額なし（精算金額合計と一致します）</span>';
-  else el.innerHTML='<span style="color:var(--bad);font-weight:700">⚠ 差額 '+yen(diff)+'（精算金額合計 '+yen(transfer)+' − 振込累計 '+yen(prevTotal+amt)+'）</span>';
+  if(diff===0) el.innerHTML='<span style="color:var(--s-green,#218c5b)">✅ 差額なし（精算金額合計と一致します）</span>';
+  else el.innerHTML='<span style="color:var(--accent);font-weight:700">⚠ 差額 '+yen(diff)+'（精算金額合計 '+yen(transfer)+' − 振込累計 '+yen(prevTotal+amt)+'）</span>';
 }
 function confirmCorpPaidFromModal(sendMail){
   var client = state._pendingPaidClient;
@@ -1043,6 +1030,64 @@ function setPaidCall(name, done, sendMail, amount, cb){
     loading(false);
     if(cb) cb.checked=!done;
     toast('エラー: '+(e.message||e));
+    loadDashboard(state.month,true);
+  });
+}
+
+/* ---- 一括プレビュー／一括発行／一括メール送信（法人配下の店舗に既存の単店舗API=sd_pdfPreview/sd_issueAndSendを順番に呼ぶだけ。新規バックエンド不要） ---- */
+function corpStoreNames_(client){
+  return state.data.stores.filter(function(s){ return (s.client||'（委託先未設定）')===client; }).map(function(s){return s.name;});
+}
+function openSettlementBatchPreview(client){
+  var names=corpStoreNames_(client);
+  loading(true,'PDFを作成しています…（店舗数分お時間がかかります）');
+  var chain=Promise.resolve(); var links=[];
+  names.forEach(function(name){
+    chain=chain.then(function(){
+      return apiAuth('sd_pdfPreview', name, state.month).then(function(res){
+        var url=b64ToBlobUrl(res.b64,'application/pdf');
+        links.push('<div class="settle-history-item"><b>'+esc(name)+'</b><p>'+esc(res.fileName)+'</p><a class="btn sm" href="'+url+'" target="_blank" rel="noopener" style="margin-top:6px;display:inline-block">🔍 開く</a> <a class="btn sm" href="'+url+'" download="'+esc(res.fileName)+'">⬇ ダウンロード</a></div>');
+      }).catch(function(e){ links.push('<div class="settle-history-item"><b>'+esc(name)+'</b><p style="color:var(--accent)">エラー: '+esc(e.message||e)+'</p></div>'); });
+    });
+  });
+  chain.then(function(){
+    loading(false);
+    openModal('👁 一括プレビュー｜'+client, '<div class="settle-history-list">'+links.join('')+'</div>');
+  });
+}
+function batchIssue(client){
+  var names=corpStoreNames_(client);
+  if(!confirm(client+'（'+names.length+'店舗）の'+state.data.monthLabel+'分 精算書PDFをまとめて発行し、Driveに保存します。メールは送りません。\nよろしいですか？')) return;
+  loading(true,'PDFを発行しています…（0/'+names.length+'）');
+  var chain=Promise.resolve(); var done=0, errs=[];
+  names.forEach(function(name){
+    chain=chain.then(function(){
+      return apiAuth('sd_issueAndSend', name, state.month, false).then(function(){
+        done++; loading(true,'PDFを発行しています…（'+done+'/'+names.length+'）');
+      }).catch(function(e){ errs.push(name+': '+(e.message||e)); done++; });
+    });
+  });
+  chain.then(function(){
+    loading(false);
+    toast(errs.length ? '⚠ '+done+'件中'+errs.length+'件エラー: '+errs.join(' / ') : '📄 '+done+'件のPDFを発行しました', 6000);
+    loadDashboard(state.month,true);
+  });
+}
+function batchMail(client){
+  var names=corpStoreNames_(client);
+  if(!confirm('【最終確認】\n'+client+'（'+names.length+'店舗）の'+state.data.monthLabel+'分 精算書PDFを作成し、各店舗のメール設定宛先へ一括送信します。\n既に送信済みの店舗は再送信になります。\nよろしいですか？')) return;
+  loading(true,'メール送信中…（0/'+names.length+'）');
+  var chain=Promise.resolve(); var done=0, errs=[];
+  names.forEach(function(name){
+    chain=chain.then(function(){
+      return apiAuth('sd_issueAndSend', name, state.month, true).then(function(){
+        done++; loading(true,'メール送信中…（'+done+'/'+names.length+'）');
+      }).catch(function(e){ errs.push(name+': '+(e.message||e)); done++; });
+    });
+  });
+  chain.then(function(){
+    loading(false);
+    toast(errs.length ? '⚠ '+done+'件中'+errs.length+'件エラー: '+errs.join(' / ') : '✉ '+done+'件のメールを送信しました', 6000);
     loadDashboard(state.month,true);
   });
 }
@@ -1094,16 +1139,16 @@ function openTrend(storeIdx){
       dots+='<circle cx="'+cx+'" cy="'+ty+'" r="4" fill="var(--accent)"><title>'+mLabel(p.mk)+' 振込 '+yen(p.transfer)+'</title></circle>';
       lastX=cx; lastY=ty;
     }
-    labels+='<text x="'+cx+'" y="'+(H-8)+'" font-size="10" text-anchor="middle" fill="var(--ink3)">'+mShort(p.mk)+'</text>';
+    labels+='<text x="'+cx+'" y="'+(H-8)+'" font-size="10" text-anchor="middle" fill="var(--muted)">'+mShort(p.mk)+'</text>';
   });
   var svg='<div class="chart-wrap"><svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" style="min-width:560px">'
     +'<line x1="'+PL+'" y1="'+(PT+innerH)+'" x2="'+(W-PL)+'" y2="'+(PT+innerH)+'" stroke="var(--line)"/>'
     +bars+line+dots+labels+'</svg></div>'
     +'<p class="muted" style="margin:4px 0 12px"><span style="display:inline-block;width:10px;height:10px;background:var(--accent-soft);border-radius:2px;margin-right:4px"></span>売上（棒）　'
     +'<span style="display:inline-block;width:10px;height:10px;background:var(--accent);border-radius:50%;margin-right:4px"></span>振込金額（線）　最大 '+man(maxV)+'円</p>';
-  var tbl='<div class="matrix-scroll"><table class="entry"><tr><th>月</th><th style="text-align:right">売上</th><th style="text-align:right">振込金額(税込)</th><th style="text-align:right">明細</th><th>発行</th><th>振込</th></tr>'
+  var tbl='<div class="settle-tablewrap"><table class="settle-table"><tr><th>月</th><th style="text-align:right">売上</th><th style="text-align:right">振込金額(税込)</th><th style="text-align:right">明細</th><th>発行</th><th>振込</th></tr>'
     + pts.map(function(p){
-        return '<tr><td>'+mLabel(p.mk)+'</td><td class="num">'+(p.sales?yen(p.sales):'－')+'</td><td class="num">'+(p.transfer!=null?yen(p.transfer):'－')+'</td><td class="num">'+p.count+'</td><td>'+(p.issued?'✓':'－')+'</td><td>'+(p.paid?'💰':'－')+'</td></tr>';
+        return '<tr><td>'+mLabel(p.mk)+'</td><td style="text-align:right">'+(p.sales?yen(p.sales):'－')+'</td><td style="text-align:right">'+(p.transfer!=null?yen(p.transfer):'－')+'</td><td style="text-align:right">'+p.count+'</td><td>'+(p.issued?'✓':'－')+'</td><td>'+(p.paid?'💰':'－')+'</td></tr>';
       }).join('')+'</table></div>';
   openModal('📈 '+st.name+'　月次推移', svg+tbl);
 }
@@ -1128,7 +1173,7 @@ function renderInputView(){
 }
 function updateBanner(){
   document.getElementById('banner-month').textContent=mLabel(document.getElementById('in-month').value)+'分';
-  document.getElementById('banner-store').textContent='／ '+document.getElementById('in-store').value;
+  document.getElementById('banner-store').textContent=document.getElementById('in-store').value;
   applyInputLock();
 }
 /* 選択中の店舗・月が振込済み（マスター以外）なら入力フォームを無効化 */
@@ -1163,9 +1208,9 @@ function matchAttachFiles(item, monthKey, store, files){
   });
 }
 function attachCellHtml(files){
-  if(!files || !files.length) return '<span class="muted" style="font-size:11px">－</span>';
+  if(!files || !files.length) return '<span class="muted">－</span>';
   return files.map(function(f){
-    return '<a class="plain" href="'+esc(f.url)+'" target="_blank" rel="noopener" title="'+esc(f.name)+'">📎'+(files.length>1?'':'')+'</a>';
+    return '<a class="plain" href="'+esc(f.url)+'" target="_blank" rel="noopener" title="'+esc(f.name)+'">📎</a>';
   }).join(' ');
 }
 function renderExisting(){
@@ -1186,16 +1231,16 @@ function renderExisting(){
       var locked = isLockedFor(st);
       var editBtn = r.row
         ? (locked
-            ? '<button class="btn sm" disabled title="振込済みのためロック中">✏️ 修正</button>'
-            : '<button class="btn sm" onclick="openEditRow('+i+')">✏️ 修正</button>')
+            ? '<button class="btn sm" disabled title="振込済みのためロック中">✏ 修正</button>'
+            : '<button class="btn sm" onclick="openEditRow('+i+')">✏ 修正</button>')
         : '';
       var delBtn = r.row
         ? (locked
-            ? '<button class="btn sm" disabled title="振込済みのためロック中">🗑 削除</button>'
-            : '<button class="btn sm danger" onclick="deleteRow('+i+')">🗑 削除</button>')
+            ? '<button class="settle-editbtn" disabled title="振込済みのためロック中">🗑 削除</button>'
+            : '<button class="settle-editbtn" onclick="deleteRow('+i+')">🗑 削除</button>')
         : '';
       var attach = attachCellHtml(matchAttachFiles(r.item, mk, st.name, files));
-      return '<tr><td>'+editBtn+' '+delBtn+'</td><td class="c"><span class="kubun-tag">'+esc(r.kubun)+'</span></td><td>'+esc(r.item)+'</td><td class="num">'+yen(r.amount)+'</td><td class="c">'+esc(r.tax)+'</td><td>'+esc(r.note)+'</td><td class="c">'+attach+'</td><td>'+esc(r.editor)+'</td><td>'+esc(r.at)+'</td><td>'+esc(r.edited||'')+'</td></tr>';
+      return '<tr><td>'+editBtn+' '+delBtn+'</td><td>'+esc(r.kubun)+'</td><td>'+esc(r.item)+'</td><td style="text-align:right">'+yen(r.amount)+'</td><td>'+esc(r.tax)+'</td><td>'+esc(r.note)+'</td><td>'+attach+'</td><td>'+esc(r.editor)+'</td><td>'+esc(r.at)+'</td><td>'+esc(r.edited||'')+'</td></tr>';
     }).join('');
   }
   var head='<tr><th style="width:130px"></th><th>区分</th><th>費目名</th><th>金額</th><th>税率</th><th>備考</th><th>📎資料</th><th>入力者</th><th>入力日</th><th>修正日</th></tr>';
@@ -1210,9 +1255,9 @@ function renderExisting(){
   }
   var dt=st.detail;
   if (dt.missing.length||dt.catWarn.length){
-    missBox.innerHTML='<div class="muted" style="margin-bottom:4px">⚠ この店舗・この月で入力漏れの疑い:</div><div style="display:flex;flex-wrap:wrap;gap:6px">'
-      + dt.catWarn.map(function(m){return '<span class="mchip cat">'+esc(m)+'</span>';}).join('')
-      + dt.missing.map(function(m){return '<span class="mchip" style="cursor:pointer" title="クリックで入力行にセット" onclick="prefillItem(\''+esc(m).replace(/'/g,"\\'")+'\')">'+esc(m)+' ＋</span>';}).join('')
+    missBox.innerHTML='<div class="muted" style="margin-bottom:4px">⚠ この店舗・この月で入力漏れの疑い:</div><div class="settle-chips">'
+      + dt.catWarn.map(function(m){return '<span class="settle-chip amber">'+esc(m)+'</span>';}).join('')
+      + dt.missing.map(function(m){return '<span class="settle-chip" style="cursor:pointer" title="クリックで入力行にセット" onclick="prefillItem(\''+esc(m).replace(/'/g,"\\'")+'\')">'+esc(m)+' ＋</span>';}).join('')
       +'</div>';
   } else missBox.innerHTML='';
 }
@@ -1225,14 +1270,14 @@ function openEditRow(rowIdx){
   var kuOpts=d.kubunOptions.map(function(k){return '<option'+(k===r.kubun?' selected':'')+'>'+esc(k)+'</option>';}).join('');
   var taxOpts=d.taxOptions.map(function(t){return '<option'+(t===r.tax?' selected':'')+'>'+esc(t)+'</option>';}).join('');
   var body='<p class="muted" style="margin-bottom:10px">'+esc(st.name)+'　'+mLabel(state.month)+'分 ／ 入力: '+esc(r.editor||'-')+'（'+esc(r.at||'-')+'）'+(r.edited?' ／ 前回修正: '+esc(r.edited):'')+'</p>'
-    +'<div class="frow"><label>区分<select id="ed-kubun">'+kuOpts+'</select></label>'
-    +'<label>税率<select id="ed-tax">'+taxOpts+'</select></label></div>'
-    +'<div class="frow"><label style="flex:1">費目名<input id="ed-item" value="'+esc(r.item)+'"></label>'
-    +'<label>金額（税込）<input id="ed-amount" inputmode="numeric" value="'+r.amount+'"></label></div>'
-    +'<div class="frow"><label style="flex:1">備考<input id="ed-note" value="'+esc(r.note||'')+'"></label></div>'
-    +'<div class="frow"><label style="flex:1">📎 資料を追加/差し替え（任意）<input type="file" id="ed-file"></label></div>'
+    +'<div class="settle-entry-top" style="grid-template-columns:1fr 1fr"><div><label>区分</label><select id="ed-kubun">'+kuOpts+'</select></div>'
+    +'<div><label>税率</label><select id="ed-tax">'+taxOpts+'</select></div></div>'
+    +'<div class="settle-entry-top" style="grid-template-columns:2fr 1fr"><div><label>費目名</label><input id="ed-item" value="'+esc(r.item)+'"></div>'
+    +'<div><label>金額（税込）</label><input id="ed-amount" inputmode="numeric" value="'+r.amount+'"></div></div>'
+    +'<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>備考</label><input id="ed-note" value="'+esc(r.note||'')+'"></div></div>'
+    +'<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>📎 資料を追加/差し替え（任意）</label><input type="file" id="ed-file"></div></div>'
     +'<p class="muted">ファイルを選ぶと、この費目名で保存します。同名の資料が既にある場合は上書きせず「【再】…」で保存され、修正版だとわかります。</p>';
-  openModal('✏️ 明細を修正', body,
+  openModal('✏ 明細を修正', body,
     '<button class="btn primary" onclick="saveEditRow('+rowIdx+')">修正を保存</button><button class="btn" onclick="closeModal()">閉じる</button>');
 }
 function saveEditRow(rowIdx){
@@ -1251,11 +1296,11 @@ function saveEditRow(rowIdx){
     kubun:document.getElementById('ed-kubun').value,item:item,amount:Number(amount),
     tax:document.getElementById('ed-tax').value,note:document.getElementById('ed-note').value.trim()})
     .then(function(t){
-      if(!file){ loading(false); toast('✏️ 修正しました（修正日を記録）'+t.summary); loadDashboard(month,true); return; }
+      if(!file){ loading(false); toast('✏ 修正しました（修正日を記録）'+t.summary); loadDashboard(month,true); return; }
       loading(true,'資料をアップロード中…');
       return readFileB64(file).then(function(b64){
         return timedApiAuth('修正+添付','sd_uploadAttachment',{store:storeName,month:month,kind:item,fileName:file.name,mimeType:file.type,b64:b64,revised:true})
-          .then(function(t2){ loading(false); toast('✏️ 修正しました（資料「'+t2.res.name+'」も保存）'+t2.summary); loadDashboard(month,true); });
+          .then(function(t2){ loading(false); toast('✏ 修正しました（資料「'+t2.res.name+'」も保存）'+t2.summary); loadDashboard(month,true); });
       });
     })
     .catch(function(e){ loading(false); perfOpEnd(); toast('修正エラー: '+(e.message||e)); });
@@ -1279,40 +1324,41 @@ function deleteRow(rowIdx){
 }
 
 function prefillItem(name){
-  var tb=document.getElementById('entry-rows');
+  var wrap=document.getElementById('entry-rows');
   var target=null;
-  for (var i=0;i<tb.children.length;i++){
-    if(!tb.children[i].querySelector('.f-item').value){ target=tb.children[i]; break; }
+  for (var i=0;i<wrap.children.length;i++){
+    if(!wrap.children[i].querySelector('.f-item').value){ target=wrap.children[i]; break; }
   }
-  if(!target){ addEntryRow(); target=tb.lastElementChild; }
+  if(!target){ addEntryRow(); target=wrap.lastElementChild; }
   target.querySelector('.f-item').value=name;
   target.querySelector('.f-amount').focus();
 }
 function addEntryRow(){
   var d=state.data;
-  var tr=document.createElement('tr');
-  tr.innerHTML='<td><select class="f-kubun">'+d.kubunOptions.map(function(k){return '<option'+(k==='変動費'?' selected':'')+'>'+esc(k)+'</option>';}).join('')+'</select></td>'
-    +'<td><input class="f-item" placeholder="例: ガス料金"></td>'
-    +'<td><input class="f-amount amount" inputmode="numeric" placeholder="0"></td>'
-    +'<td><select class="f-tax">'+d.taxOptions.map(function(t){return '<option>'+esc(t)+'</option>';}).join('')+'</select></td>'
-    +'<td><input class="f-note" placeholder="根拠資料名など"></td>'
-    +'<td><input type="file" class="f-file"></td>'
-    +'<td><button class="rowdel" title="行を削除" onclick="this.closest(\'tr\').remove()">✕</button></td>';
-  document.getElementById('entry-rows').appendChild(tr);
+  var row=document.createElement('div');
+  row.className='settle-form-row';
+  row.innerHTML='<div><select class="f-kubun">'+d.kubunOptions.map(function(k){return '<option'+(k==='変動費'?' selected':'')+'>'+esc(k)+'</option>';}).join('')+'</select></div>'
+    +'<div><input class="f-item" placeholder="例: ガス料金"></div>'
+    +'<div><input class="f-amount" inputmode="numeric" placeholder="0"></div>'
+    +'<div><select class="f-tax">'+d.taxOptions.map(function(t){return '<option>'+esc(t)+'</option>';}).join('')+'</select></div>'
+    +'<div><input class="f-note" placeholder="根拠資料名など"></div>'
+    +'<div class="settle-file"><input type="file" class="f-file"></div>'
+    +'<button class="btn sm" title="行を削除" onclick="this.parentElement.remove()">×</button>';
+  document.getElementById('entry-rows').appendChild(row);
 }
 function collectRows(){
   var out=[];
-  var trs=document.getElementById('entry-rows').children;
-  for (var i=0;i<trs.length;i++){
-    var tr=trs[i];
-    var item=tr.querySelector('.f-item').value.trim();
-    var amtRaw=tr.querySelector('.f-amount').value.replace(/[¥￥,，\s]/g,'');
-    var fileEl=tr.querySelector('.f-file');
+  var rows=document.getElementById('entry-rows').children;
+  for (var i=0;i<rows.length;i++){
+    var row=rows[i];
+    var item=row.querySelector('.f-item').value.trim();
+    var amtRaw=row.querySelector('.f-amount').value.replace(/[¥￥,，\s]/g,'');
+    var fileEl=row.querySelector('.f-file');
     var file=fileEl&&fileEl.files&&fileEl.files[0]?fileEl.files[0]:null;
     if(!item && !amtRaw && !file) continue;
     if(!item) throw new Error((i+1)+'行目: 費目名が空です');
     if(amtRaw===''||isNaN(Number(amtRaw))) throw new Error((i+1)+'行目「'+item+'」: 金額が数値ではありません');
-    out.push({kubun:tr.querySelector('.f-kubun').value,item:item,amount:Number(amtRaw),tax:tr.querySelector('.f-tax').value,note:tr.querySelector('.f-note').value.trim(),file:file});
+    out.push({kubun:row.querySelector('.f-kubun').value,item:item,amount:Number(amtRaw),tax:row.querySelector('.f-tax').value,note:row.querySelector('.f-note').value.trim(),file:file});
   }
   return out;
 }
@@ -1375,7 +1421,10 @@ function finishSubmit(res, month, uploaded, t0){
   loadDashboard(month,true);
 }
 
-/* ===== PDF／発行 ===== */
+/* ===== PDF／発行 =====
+ * 👁精算書プレビュー: 見るだけ（Driveに保存しない・メールしない）→ sd_pdfPreview
+ * 📄PDF発行: Driveに保存するがメールはしない → sd_issueAndSend(...,sendMail=false)
+ * ✉メール送信: Driveに保存してメールも送る → sd_issueAndSend(...,sendMail=true) */
 function pdfPreview(storeIdx){
   var st=state.data.stores[storeIdx];
   loading(true,'PDFを作成しています…（10秒ほどかかります）');
@@ -1385,12 +1434,23 @@ function pdfPreview(storeIdx){
     var w=window.open(url,'_blank');
     var openBtn='<button class="btn primary" onclick="var w=window.open(\''+url+'\',\'_blank\'); if(!w) alert(\'ポップアップがブロックされました。ブラウザのアドレスバー右側の許可アイコンから許可するか、下の「ダウンロード」をお使いください。\');">🔍 新しいタブで開く</button>';
     var foot=openBtn+'<a class="btn" href="'+url+'" download="'+esc(res.fileName)+'">⬇ ダウンロード</a>';
-    if(isHonbu()) foot+='<button class="btn primary" onclick="closeModal();issueSendByName(\''+esc(st.name).replace(/'/g,"\\'")+'\')">✉️ この内容で発行してメール送信</button>';
+    if(isHonbu()) foot+='<button class="btn primary" onclick="closeModal();issueSendByName(\''+esc(st.name).replace(/'/g,"\\'")+'\')">✉ この内容で発行してメール送信</button>';
     foot+='<button class="btn" onclick="closeModal()">閉じる</button>';
     var body='<p>'+esc(res.fileName)+'</p>'
       +'<p class="muted" style="margin-top:6px">'+(w?'新しいタブでPDFを開きました。開かなかった場合は下の「新しいタブで開く」またはダウンロードをお使いください。':'ブラウザのポップアップブロックにより自動で開けませんでした。下の「新しいタブで開く」またはダウンロードをお使いください。')+'</p>';
-    openModal('📄 '+st.name+'　'+state.data.monthLabel+'分 精算書プレビュー', body, foot);
+    openModal('👁 '+st.name+'　'+state.data.monthLabel+'分 精算書プレビュー', body, foot);
   }).catch(function(e){ loading(false); toast('PDF作成エラー: '+(e.message||e)); });
+}
+function openSettlementPreviewStore(storeIdx){ pdfPreview(storeIdx); }
+function issueOnly(storeIdx){
+  var st=state.data.stores[storeIdx];
+  if(!confirm('【確認】\n'+state.data.monthLabel+'分 ／ '+st.name+'\n\n精算書PDFを作成してDriveに保存します（メールは送信しません）。\nよろしいですか？')) return;
+  loading(true,'PDF発行中…');
+  apiAuth('sd_issueAndSend', st.name, state.month, false).then(function(res){
+    loading(false);
+    toast('📄 '+res.fileName+' を発行しました（Driveに保存・メールは未送信）');
+    loadDashboard(state.month,true);
+  }).catch(function(e){ loading(false); toast('発行エラー: '+(e.message||e)); });
 }
 function issueSend(storeIdx){ issueSendByName(state.data.stores[storeIdx].name); }
 function issueSendByName(storeName){
@@ -1407,6 +1467,21 @@ function issueSendByName(storeName){
     loadDashboard(state.month,true);
   }).catch(function(e){ loading(false); toast('送信エラー: '+(e.message||e)); });
 }
+/* 送信履歴（🕘）: 専用の履歴ログAPIは無いため、現在の送信状況（dt.sent／発行済みフラグ）を
+ * それぞれ1件ずつ表示する（無いものを捏造しない）。 */
+function openSettlementHistory(storeIdx){
+  var st=state.data.stores[storeIdx];
+  var dt=st.detail;
+  var items=[];
+  if(dt.sent){
+    items.push('<div class="settle-history-item"><b>'+esc(dt.sent.at)+'　'+esc(dt.sent.action)+'</b><p>'+(dt.sent.to?'宛先：'+esc(dt.sent.to):'')+'</p></div>');
+  }
+  if(dt.issuedThis && !(dt.sent&&dt.sent.action==='メール送信')){
+    items.push('<div class="settle-history-item"><b>この月は発行済みです</b><p>PDFはDriveに保存されています</p></div>');
+  }
+  if(!items.length) items.push('<div class="muted">この月はまだ発行・送信の記録がありません</div>');
+  openModal('🕘 送信履歴｜'+st.name, '<div class="settle-history-list">'+items.join('')+'</div>');
+}
 
 /* ===== 現金売上取込 ===== */
 function openCashModal(){
@@ -1416,15 +1491,15 @@ function openCashModal(){
     var rows=res.items.map(function(it){
       var stateHtml, check='';
       if(it.amount==null){ stateHtml='<span class="muted">売上シートにデータなし</span>'; }
-      else if(it.already.length){ stateHtml='<span class="mchip cat">既に入力あり（チェックすると上書き更新）: '+esc(it.already.join(' / '))+'</span>'; }
-      else { stateHtml='<span class="ok-note">取込可</span>'; check='checked'; }
+      else if(it.already.length){ stateHtml='<span class="settle-chip amber">既に入力あり（チェックすると上書き更新）: '+esc(it.already.join(' / '))+'</span>'; }
+      else { stateHtml='<span class="settle-ok">取込可</span>'; check='checked'; }
       var box=it.amount!=null?'<input type="checkbox" class="cash-check" data-store="'+esc(it.store)+'" '+check+'>':'';
       return '<tr><td>'+box+'</td><td>'+esc(it.store)+'<br><span class="muted">'+esc(it.salesName)+'</span></td>'
-        +'<td class="num">'+(it.amount!=null?yen(it.amount):'－')+'</td><td>'+(it.days||'－')+'日</td><td>'+stateHtml+'</td></tr>';
+        +'<td style="text-align:right">'+(it.amount!=null?yen(it.amount):'－')+'</td><td>'+(it.days||'－')+'日</td><td>'+stateHtml+'</td></tr>';
     }).join('');
-    openModal('💴 現金売上の取込　'+res.monthLabel+'分',
+    openModal('💵 現金売上の取込　'+res.monthLabel+'分',
       '<p class="muted" style="margin-bottom:8px">【サーバー】ダッシュボード「分析_日別店舗」T列（現金）の月合計です。チェックした店舗に「◯月現金売上」として登録します。既に入力済みの店舗は、新規追加ではなく既存の行を上書き更新します（重複しません）。</p>'
-      +'<div class="matrix-scroll"><table class="entry"><tr><th></th><th>店舗</th><th style="text-align:right">現金売上合計</th><th>日数</th><th>状態</th></tr>'+rows+'</table></div>',
+      +'<div class="settle-tablewrap"><table class="settle-table"><tr><th></th><th>店舗</th><th style="text-align:right">現金売上合計</th><th>日数</th><th>状態</th></tr>'+rows+'</table></div>',
       '<button class="btn primary" onclick="applyCash()">チェックした店舗に登録する</button><button class="btn" onclick="closeModal()">閉じる</button>');
   }).catch(function(e){ loading(false); toast('集計エラー: '+(e.message||e)); });
 }
@@ -1442,7 +1517,7 @@ function applyCash(){
 
 /* ===== 定期費目 ===== */
 function prepareMonth(){
-  if(!confirm(state.data.monthLabel+'分に、前月の固定ロイヤリティと「定期費目_精算ダッシュボード」シートの費目を自動セットします。\n（既に入力済みの費目はスキップされます）\nよろしいですか？')) return;
+  if(!confirm(state.data.monthLabel+'分に、前月の固定ロイヤリティと「定期費目_精算ダッシュボード」シートの費目（状態=毎月のもの）を自動セットします。\n（既に入力済みの費目はスキップされます）\nよろしいですか？')) return;
   loading(true,'セット中…');
   apiAuth('sd_prepareMonth', state.month).then(function(res){
     loading(false);
@@ -1476,15 +1551,15 @@ function openAttach(storeIdx){
 }
 function renderAttachModal(storeName, files){
   var list = files.length
-    ? '<table class="entry"><tr><th>ファイル名</th><th>登録日</th><th></th></tr>'+files.map(function(f){
+    ? '<table class="settle-table"><tr><th>ファイル名</th><th>登録日</th><th></th></tr>'+files.map(function(f){
         return '<tr><td>'+esc(f.name)+'</td><td>'+esc(f.date)+'</td><td><a class="plain" href="'+esc(f.url)+'" target="_blank" rel="noopener">開く ↗</a></td></tr>';
       }).join('')+'</table>'
     : '<p class="muted">この月の添付はまだありません</p>';
   var up = isHonbu()
     ? '<div style="border-top:1px dashed var(--line);margin-top:14px;padding-top:14px">'
       +'<h4 style="font-size:13px;margin-bottom:8px">📤 新しくアップロード（自動で「種類_'+state.month.replace('-','.')+'_'+esc(storeName)+'」にリネームされます）</h4>'
-      +'<div class="frow"><label>何の書類？<input id="att-kind" placeholder="例: カード売上"></label>'
-      +'<label>ファイル<input type="file" id="att-file" style="padding:6px"></label></div>'
+      +'<div class="settle-entry-top" style="grid-template-columns:1fr 1fr"><div><label>何の書類？</label><input id="att-kind" placeholder="例: カード売上"></div>'
+      +'<div><label>ファイル</label><input type="file" id="att-file"></div></div>'
       +'<button class="btn primary" onclick="uploadAttach()">アップロード</button>'
       +'</div>'
     : '';
@@ -1518,12 +1593,12 @@ function writeCheckSheet(){
     .catch(function(e){ loading(false); toast('エラー: '+(e.message||e)); });
 }
 
-/* ===== ⑥ 年間推移 ===== */
+/* ===== 年間推移 ===== */
 var annualMetric='sales';
 function setAnnualMetric(m){
   annualMetric=m;
   [].slice.call(document.querySelectorAll('#annual-metric button')).forEach(function(b){
-    b.classList.toggle('on', b.getAttribute('data-metric')===m);
+    b.classList.toggle('active', b.getAttribute('data-metric')===m);
   });
   renderAnnual();
 }
@@ -1534,7 +1609,7 @@ function renderAnnual(){
   if(nsBtn) nsBtn.style.display = isHonbu()?'':'none';
   if(!isHonbu() && annualMetric==='ns') { annualMetric='sales'; }
   [].slice.call(document.querySelectorAll('#annual-metric button')).forEach(function(b){
-    b.classList.toggle('on', b.getAttribute('data-metric')===annualMetric);
+    b.classList.toggle('active', b.getAttribute('data-metric')===annualMetric);
   });
   var metric=annualMetric;
   var head='<tr><th style="text-align:left">店舗</th>'+d.months.map(function(mk){
@@ -1547,17 +1622,17 @@ function renderAnnual(){
     var cells=d.months.map(function(mk){
       var m=st.matrix[mk]||{};
       var v=m[metric];
-      var cls=mk===d.month?' class="num sel"':' class="num"';
+      var cls=mk===d.month?' class="sel"':'';
       if(v==null) return '<td'+cls+'><span class="cell-none">－</span></td>';
       rowTotal+=v; colTotals[mk]+=v;
       return '<td'+cls+'>'+yen(v)+'</td>';
     }).join('');
     grand+=rowTotal;
-    return '<tr><td class="store-name">'+esc(st.name)+'</td>'+cells+'<td class="num" style="font-weight:700">'+yen(rowTotal)+'</td></tr>';
+    return '<tr><td class="store-name">'+esc(st.name)+'</td>'+cells+'<td style="font-weight:700;text-align:right">'+yen(rowTotal)+'</td></tr>';
   }).join('');
-  var totalRow='<tr class="total-row"><td class="store-name">全店合計</td>'+d.months.map(function(mk){
-    return '<td class="num">'+yen(colTotals[mk])+'</td>';
-  }).join('')+'<td class="num">'+yen(grand)+'</td></tr>';
+  var totalRow='<tr class="total"><td class="store-name">全店合計</td>'+d.months.map(function(mk){
+    return '<td>'+yen(colTotals[mk])+'</td>';
+  }).join('')+'<td>'+yen(grand)+'</td></tr>';
   document.getElementById('annual-table').innerHTML=head+body+totalRow;
 }
 
@@ -1600,7 +1675,7 @@ function downloadAnnualCsv(){
   toast('⬇ CSVをダウンロードしました');
 }
 
-/* ===== ⑤ 先の月へ一括計上 ===== */
+/* ===== 先の月へ一括計上 ===== */
 function openBulkModal(){
   var d=state.data;
   var stOpts=d.stores.map(function(s){return '<option>'+esc(s.name)+'</option>';}).join('');
@@ -1608,14 +1683,14 @@ function openBulkModal(){
   var mOpts=d.months.map(function(mk){return '<option value="'+mk+'">'+mLabel(mk)+'</option>';}).join('');
   var taxOpts=d.taxOptions.map(function(t){return '<option>'+esc(t)+'</option>';}).join('');
   var body='<p class="muted" style="margin-bottom:10px">同じ費目を、開始月から終了月まで毎月まとめて計上します（例：2026年7月〜12月まで毎月30万円を変動費）。</p>'
-    +'<div class="frow"><label>店舗<select id="bk-store">'+stOpts+'</select></label>'
-    +'<label>区分<select id="bk-kubun">'+kuOpts+'</select></label>'
-    +'<label>税率<select id="bk-tax">'+taxOpts+'</select></label></div>'
-    +'<div class="frow"><label style="flex:1">費目名<input id="bk-item" placeholder="例: 固定委託料"></label></div>'
-    +'<div class="frow"><label>金額（税込・毎月）<input id="bk-amount" inputmode="numeric" placeholder="300000"></label>'
-    +'<label>開始月<select id="bk-from">'+mOpts+'</select></label>'
-    +'<label>終了月<select id="bk-to">'+mOpts+'</select></label></div>'
-    +'<div class="frow"><label style="flex:1">備考<input id="bk-note" placeholder="任意"></label></div>';
+    +'<div class="settle-entry-top"><div><label>店舗</label><select id="bk-store">'+stOpts+'</select></div>'
+    +'<div><label>区分</label><select id="bk-kubun">'+kuOpts+'</select></div>'
+    +'<div><label>税率</label><select id="bk-tax">'+taxOpts+'</select></div></div>'
+    +'<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>費目名</label><input id="bk-item" placeholder="例: 固定委託料"></div></div>'
+    +'<div class="settle-entry-top"><div><label>金額（税込・毎月）</label><input id="bk-amount" inputmode="numeric" placeholder="300000"></div>'
+    +'<div><label>開始月</label><select id="bk-from">'+mOpts+'</select></div>'
+    +'<div><label>終了月</label><select id="bk-to">'+mOpts+'</select></div></div>'
+    +'<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>備考</label><input id="bk-note" placeholder="任意"></div></div>';
   openModal('📅 先の月へ一括計上', body,
     '<button class="btn primary" onclick="submitBulk()">一括計上する</button><button class="btn" onclick="closeModal()">閉じる</button>');
   // 初期値: 開始=対象月, 終了=対象月
@@ -1650,7 +1725,7 @@ function addMonthStr(key,n){
   return dt.getFullYear()+'-'+('0'+(dt.getMonth()+1)).slice(-2);
 }
 
-/* ===== ③ 設定（アカウント・法人） ===== */
+/* ===== 設定（アカウント・法人・ロイヤリティ・定期費目・自動処理権限） ===== */
 var settingsCache=null;
 function loadSettings(){
   loading(true,'設定を読み込み中…');
@@ -1661,29 +1736,75 @@ function loadSettings(){
 function renderSettings(){
   var s=settingsCache; if(!s) return;
   var ml=document.getElementById('master-link'); if(s.masterSheetUrl){ ml.href=s.masterSheetUrl; }
-  // アカウント
+
+  // 🏦 振込先口座
+  document.getElementById('corp-settings-list').innerHTML = s.corps.length
+    ? s.corps.map(function(c,i){
+        return '<div class="settle-setting-row"><strong>'+esc(c.client)+(c.account?'':' <span class="muted">（未登録）</span>')+'</strong><button class="btn sm" onclick="openCorpModal('+i+')">口座を'+(c.account?'編集':'登録')+'</button></div>';
+      }).join('')
+    : '<p class="muted">法人（委託先）がまだ登録されていません</p>';
+
+  // 💹 ロイヤリティ設定（保存はsd_saveStoreRate。inputのonchangeで即保存）
+  document.getElementById('rate-settings-list').innerHTML = s.stores.map(function(st){
+    var nm=esc(st.name).replace(/'/g,"\\'");
+    return '<div class="settle-setting-row"><strong>'+esc(st.name)+'</strong><input value="'+esc(st.rate)+'" onchange="saveStoreRateInline(this,\''+nm+'\')"'+(isMaster()||isHonbu()?'':' disabled')+'></div>';
+  }).join('');
+
+  // 🔁 定期費目（保存はsd_saveRecurStatus。selectのonchangeで即保存）
+  var recur=s.recur||[];
+  document.getElementById('recur-settings-list').innerHTML = recur.length
+    ? recur.map(function(r){
+        var st=esc(r.store).replace(/'/g,"\\'"), it=esc(r.item).replace(/'/g,"\\'");
+        return '<div class="settle-setting-row"><strong>'+esc(r.store)+' / '+esc(r.item)+'</strong>'
+          +'<select onchange="saveRecurStatusInline(this,\''+st+'\',\''+it+'\')"><option value="有効"'+(r.status!=='停止'?' selected':'')+'>毎月</option><option value="停止"'+(r.status==='停止'?' selected':'')+'>停止</option></select></div>';
+      }).join('')
+    : '<p class="muted">「定期費目_精算ダッシュボード」シートに費目がまだ登録されていません</p>';
+
+  // ⚙ 自動処理・権限
+  var ops=s.ops||{lockLevel:'master',autoSendMode:'manual'};
+  var lockSel=document.getElementById('ops-lock-level'), sendSel=document.getElementById('ops-autosend-mode');
+  lockSel.value=ops.lockLevel; sendSel.value=ops.autoSendMode;
+  var masterOnly=!isMaster();
+  lockSel.disabled=masterOnly; sendSel.disabled=masterOnly;
+  document.getElementById('ops-master-note').style.display=masterOnly?'':'none';
+
+  // 👤 アカウント
   document.getElementById('acct-table').innerHTML=
     '<tr><th>ログインID</th><th>表示名</th><th>権限</th><th>担当店舗</th><th>有効</th><th></th></tr>'
     + s.accounts.map(function(a,i){
-        var roleTag = a.role==='マスター' ? '<span class="st-tag paid">👑 マスター</span>' : esc(a.role);
+        var roleTag = a.role==='マスター' ? '<span class="settle-badge paid">👑 マスター</span>' : esc(a.role);
         return '<tr><td>'+esc(a.id)+'</td><td>'+esc(a.name)+'</td><td>'+roleTag+'</td>'
           +'<td>'+esc(a.stores||(a.role!=='委託先'?'全店':''))+'</td>'
           +'<td>'+(a.enabled?'✅':'—')+'</td>'
           +'<td><button class="btn sm" onclick="openAccountModal('+i+')">編集</button></td></tr>';
       }).join('');
-  // 法人
-  document.getElementById('corp-settings-table').innerHTML=
-    '<tr><th>法人（委託先）</th><th>振込先口座</th><th>備考</th><th></th></tr>'
-    + s.corps.map(function(c,i){
-        return '<tr><td>'+esc(c.client)+'</td><td>'+(c.account?esc(c.account):'<span class="muted">未登録</span>')+'</td><td>'+esc(c.note||'')+'</td>'
-          +'<td><button class="btn sm" onclick="openCorpModal('+i+')">編集</button></td></tr>';
-      }).join('');
-  // 店舗マスタ
+
+  // 🏬 店舗マスタ
   document.getElementById('store-settings-table').innerHTML=
     '<tr><th>店舗</th><th>委託先</th><th>変動ロイヤリティ率</th><th>DB</th></tr>'
     + s.stores.map(function(st){
-        return '<tr><td>'+esc(st.name)+'</td><td>'+esc(st.client)+'</td><td>'+esc(st.rate)+'</td><td>'+(st.hasDb?'✅':'<span class="mchip cat">未検出</span>')+'</td></tr>';
+        return '<tr><td>'+esc(st.name)+'</td><td>'+esc(st.client)+'</td><td>'+esc(st.rate)+'</td><td>'+(st.hasDb?'✅':'<span class="settle-chip amber">未検出</span>')+'</td></tr>';
       }).join('');
+}
+function saveStoreRateInline(input, storeName){
+  var v=input.value.trim();
+  apiAuth('sd_saveStoreRate', storeName, v).then(function(){
+    toast('✅ '+storeName+' のロイヤリティ率を「'+v+'」で保存しました');
+    invalidateCache();
+  }).catch(function(e){ toast('保存エラー: '+(e.message||e)); loadSettings(); });
+}
+function saveRecurStatusInline(sel, storeName, item){
+  var v=sel.value;
+  apiAuth('sd_saveRecurStatus', storeName, item, v).then(function(){
+    toast('✅ '+storeName+' / '+item+' を「'+(v==='停止'?'停止':'毎月')+'」にしました');
+  }).catch(function(e){ toast('保存エラー: '+(e.message||e)); loadSettings(); });
+}
+function saveOpsSettings(){
+  var settings={ lockLevel: document.getElementById('ops-lock-level').value, autoSendMode: document.getElementById('ops-autosend-mode').value };
+  apiAuth('sd_saveOpsSettings', settings).then(function(){
+    toast('✅ 自動処理・権限の設定を保存しました');
+    invalidateCache();
+  }).catch(function(e){ toast('保存エラー: '+(e.message||e)); loadSettings(); });
 }
 function openAccountModal(idx){
   var a = (idx!=null && settingsCache) ? settingsCache.accounts[idx] : {id:'',pw:'',name:'',role:'委託先',stores:'',enabled:true};
@@ -1692,15 +1813,15 @@ function openAccountModal(idx){
     var checked = a.stores && a.stores.split(/[,、，]/).map(function(x){return x.trim();}).indexOf(st.name)>-1;
     return '<label style="display:inline-flex;align-items:center;gap:4px;margin:2px 8px 2px 0;font-size:13px"><input type="checkbox" class="acc-store" value="'+esc(st.name)+'" '+(checked?'checked':'')+'> '+esc(st.name)+'</label>';
   }).join('');
-  var body='<div class="frow"><label>ログインID<input id="acc-id" value="'+esc(a.id)+'" '+(isNew?'':'readonly')+'></label>'
-    +'<label>パスワード<input id="acc-pw" value="'+esc(a.pw)+'"></label>'
-    +'<label>表示名<input id="acc-name" value="'+esc(a.name)+'"></label></div>'
-    +'<div class="frow"><label>権限<select id="acc-role" onchange="document.getElementById(\'acc-stores-wrap\').style.display=this.value===\'委託先\'?\'\':\'none\'">'
+  var body='<div class="settle-entry-top"><div><label>ログインID</label><input id="acc-id" value="'+esc(a.id)+'" '+(isNew?'':'readonly')+'></div>'
+    +'<div><label>パスワード</label><input id="acc-pw" value="'+esc(a.pw)+'"></div>'
+    +'<div><label>表示名</label><input id="acc-name" value="'+esc(a.name)+'"></div></div>'
+    +'<div class="settle-entry-top" style="grid-template-columns:1fr 1fr"><div><label>権限</label><select id="acc-role" onchange="document.getElementById(\'acc-stores-wrap\').style.display=this.value===\'委託先\'?\'\':\'none\'">'
     +(isMaster()?'<option'+(a.role==='マスター'?' selected':'')+'>マスター</option>':'')
-    +'<option'+(a.role==='本部'?' selected':'')+'>本部</option><option'+(a.role==='委託先'?' selected':'')+'>委託先</option></select></label>'
-    +'<label>有効<select id="acc-enabled"><option value="TRUE"'+(a.enabled?' selected':'')+'>有効</option><option value="FALSE"'+(!a.enabled?' selected':'')+'>無効</option></select></label></div>'
-    +'<div class="frow"><label style="flex:1">統合アカウントのメール（ポータル／日報と共通ログイン。委託先は対象外）'
-    +'<input id="acc-email" type="email" value="'+esc(a.email||'')+'" placeholder="例: taro@ns0314.com（空欄＝統合ログイン不可）"></label></div>'
+    +'<option'+(a.role==='本部'?' selected':'')+'>本部</option><option'+(a.role==='委託先'?' selected':'')+'>委託先</option></select></div>'
+    +'<div><label>有効</label><select id="acc-enabled"><option value="TRUE"'+(a.enabled?' selected':'')+'>有効</option><option value="FALSE"'+(!a.enabled?' selected':'')+'>無効</option></select></div></div>'
+    +'<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>統合アカウントのメール（ポータル／日報と共通ログイン。委託先は対象外）</label>'
+    +'<input id="acc-email" type="email" value="'+esc(a.email||'')+'" placeholder="例: taro@ns0314.com（空欄＝統合ログイン不可）"></div></div>'
     +'<div id="acc-stores-wrap" style="'+(a.role!=='委託先'?'display:none':'')+'"><div class="muted" style="margin-bottom:4px">担当店舗（委託先が閲覧できる店舗）</div>'+storeChecks+'</div>';
   openModal(isNew?'＋ アカウントを追加':'アカウントを編集: '+esc(a.id), body,
     '<button class="btn primary" onclick="saveAccount()">保存</button><button class="btn" onclick="closeModal()">閉じる</button>');
@@ -1728,10 +1849,10 @@ function saveAccount(){
 }
 function openCorpModal(idx){
   var c=settingsCache.corps[idx];
-  var body='<div class="frow"><label style="flex:1">法人（委託先）<input value="'+esc(c.client)+'" readonly></label></div>'
-    +'<div class="frow"><label style="flex:1">振込先口座<input id="corp-account" value="'+esc(c.account||'')+'" placeholder="例: 三井住友銀行 渋谷支店 普通 1234567 ｶ)〇〇"></label></div>'
-    +'<div class="frow"><label style="flex:1">備考<input id="corp-note" value="'+esc(c.note||'')+'"></label></div>';
-  openModal('🏢 '+esc(c.client)+' の振込先', body,
+  var body='<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>法人（委託先）</label><input value="'+esc(c.client)+'" readonly></div></div>'
+    +'<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>振込先口座</label><input id="corp-account" value="'+esc(c.account||'')+'" placeholder="例: 三井住友銀行 渋谷支店 普通 1234567 ｶ)〇〇"></div></div>'
+    +'<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>備考</label><input id="corp-note" value="'+esc(c.note||'')+'"></div></div>';
+  openModal('🏦 '+esc(c.client)+' の振込先', body,
     '<button class="btn primary" onclick="saveCorp(\''+esc(c.client).replace(/'/g,"\\'")+'\')">保存</button><button class="btn" onclick="closeModal()">閉じる</button>');
 }
 function saveCorp(client){
