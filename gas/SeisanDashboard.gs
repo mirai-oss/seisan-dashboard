@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.15-settings-api';
+var SD_VERSION = 'v5.16-pl-category';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -47,7 +47,8 @@ var SD_API_WHITELIST = [
   'sd_prepareMonth', 'sd_setupAutoPrep', 'sd_uploadAttachment', 'sd_listAttachments',
   'sd_getPdfB64', 'sd_updateCheckSheet', 'sd_bulkAdd', 'sd_getSettings',
   'sd_saveAccount', 'sd_saveCorp', 'sd_testChatwork', 'sd_apiTransferEx',
-  'sd_saveStoreRate', 'sd_saveRecurStatus', 'sd_saveOpsSettings', 'sd_getOpsSettings'
+  'sd_saveStoreRate', 'sd_saveRecurStatus', 'sd_saveOpsSettings', 'sd_getOpsSettings',
+  'sd_suggestAccount', 'sd_bulkCategorize', 'sd_apiCategorizedLines'
 ];
 
 function sd_apiFnMap_() {
@@ -62,7 +63,9 @@ function sd_apiFnMap_() {
     sd_saveAccount: sd_saveAccount, sd_saveCorp: sd_saveCorp, sd_testChatwork: sd_testChatwork,
     sd_apiTransferEx: sd_apiTransferEx,
     sd_saveStoreRate: sd_saveStoreRate, sd_saveRecurStatus: sd_saveRecurStatus,
-    sd_saveOpsSettings: sd_saveOpsSettings, sd_getOpsSettings: sd_getOpsSettings
+    sd_saveOpsSettings: sd_saveOpsSettings, sd_getOpsSettings: sd_getOpsSettings,
+    sd_suggestAccount: sd_suggestAccount, sd_bulkCategorize: sd_bulkCategorize,
+    sd_apiCategorizedLines: sd_apiCategorizedLines
   };
 }
 
@@ -246,6 +249,8 @@ function sd_detectRaw_() {
           else if (n === '支払済') colMap.paid = i + 1;
           else if (n === 'リンク') colMap.link = i + 1;
           else if (n === '修正日') colMap.edited = i + 1;
+          else if (n === '勘定科目') colMap.account = i + 1;
+          else if (n === '補助科目') colMap.subAccount = i + 1;
         });
         if (colMap.ym && colMap.kubun && colMap.item && colMap.amount) {
           var title = name;
@@ -948,7 +953,9 @@ function sd_readRows_(db) {
       editor: cm.editor ? String(d[cm.editor - 1] || '') : '',
       at: cm.at ? String(d[cm.at - 1] || '') : '',
       paid: cm.paid ? String(d[cm.paid - 1] || '') : '',
-      edited: cm.edited ? String(d[cm.edited - 1] || '') : ''
+      edited: cm.edited ? String(d[cm.edited - 1] || '') : '',
+      account: cm.account ? String(d[cm.account - 1] || '').trim() : '',
+      subAccount: cm.subAccount ? String(d[cm.subAccount - 1] || '').trim() : ''
     });
   }
   return rows;
@@ -1083,7 +1090,7 @@ function sd_getDashboard(token, monthKey) {
     });
     var chk = st.db ? sd_missing_(byMonth, monthKey, st.required) : { missing: [], catWarn: ['DBシート未検出'] };
     var curRows = (byMonth[monthKey] || []).map(function (r) {
-      return { row: r.row, kubun: r.kubun, item: r.item, amount: r.amount, tax: r.tax, note: r.note, editor: r.editor, at: r.at, edited: r.edited };
+      return { row: r.row, kubun: r.kubun, item: r.item, amount: r.amount, tax: r.tax, note: r.note, editor: r.editor, at: r.at, edited: r.edited, account: r.account, subAccount: r.subAccount };
     });
     var settleFull = settleFor(monthKey);
     var settle = {
@@ -1140,6 +1147,7 @@ function sd_getDashboard(token, monthKey) {
     corps: corps, // 法人名(正規化) → {account, note}
     kubunOptions: Object.keys(kubunSet),
     taxOptions: SD_TAX_OPTIONS,
+    accountOptions: SD_ACCOUNT_LIST, // A-9: 勘定科目の選択肢（明細を入力タブの科目列で使用）
     sheetUrl: user.role === '本部' ? ss.getUrl() : '',
     updatedAt: Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd HH:mm'),
     _ms: timer.breakdown()
@@ -1201,6 +1209,7 @@ function sd_addRows(token, payload) {
       if (dups.length) return { ok: false, dup: dups, _ms: timer.breakdown() };
     }
 
+    sd_ensureCategoryCols_(st.db);
     var added = sd_appendRows_(st.db, ymDate, rows, payload.editor || user.name);
     timer.mark('write');
     sd_clearRowsCache_(st.db.sheet);
@@ -1241,6 +1250,7 @@ function sd_updateRow(token, payload) {
       sh.getRange(st.db.headerRow, width0 + 1).setValue('修正日');
       cm.edited = width0 + 1;
     }
+    sd_ensureCategoryCols_(st.db); // 勘定科目・補助科目列も同様に自動作成（A-9）
     var width = 0;
     Object.keys(cm).forEach(function (k) { if (cm[k] > width) width = cm[k]; });
 
@@ -1278,6 +1288,8 @@ function sd_updateRow(token, payload) {
     vals[cm.amount - 1] = newAmt;
     if (cm.tax) vals[cm.tax - 1] = payload.tax || '10%';
     if (cm.note) vals[cm.note - 1] = String(payload.note || '');
+    if (cm.account) vals[cm.account - 1] = String(payload.account || '');
+    if (cm.subAccount) vals[cm.subAccount - 1] = String(payload.subAccount || '');
     vals[cm.edited - 1] = Utilities.formatDate(new Date(), SD_TZ, 'M/d') + ' ' + user.name;
     rowRange.setValues([vals]);
     timer.mark('write');
@@ -1348,6 +1360,160 @@ function sd_deleteRow(token, payload) {
   }
 }
 
+/* ================== A-9: 勘定科目・補助科目→PL自動連携（2026-08-31追加） ==================
+ * 設計書_広告費自動連携と精算書PL科目連携_2026-08-31.md §2・§4。
+ * 精算書の明細に勘定科目・補助科目を付け、tori-dashboard側のsyncSeisanCategoriesToPl
+ * （PL_SYNC_TOKEN認証・sd_apiCategorizedLinesを呼ぶ）がDB_PLへ自動計上する。
+ * 科目リストはtori-dashboard/app.jsのPL_ITEM_CATと同じ24科目（勘定科目の区分＝S/F/L/A/R/O/Xの
+ * 判定はtori-dashboard側が担当するため、こちら側は科目名の一覧だけ持てば十分）。
+ * 「対象外」はPLに送らない明細（固定ロイヤリティ等）用の特別値。「運営委託費」は既存の
+ * syncSeisanFeeToPl（業務委託費の自動連携）と役割が重なるため、一覧には残すが同期側で除外される。
+ * ※ tori-dashboard/app.jsのPL_ITEM_CATを変更した場合はこちらも手動で合わせること（自動同期はしない
+ * ＝ほぼ変わらない固定リストのため、常時同期の仕組みを作るのは過剰実装と判断）。 */
+var SD_ACCOUNT_LIST = [
+  '対象外',
+  '役員報酬', '法定福利費', '通勤手当', '旅費交通費', '賞与積立', '退職金等',
+  '家賃', 'リース料', '家賃更新按分', '広告宣伝費', '販売促進費',
+  '水道光熱費', '通信費', '消耗品・備品費', '修繕費', '衛生管理費', 'カード手数料', '支払手数料',
+  '支払報酬料', '採用教育費', '接待交際費', '会議費', '慶弔見舞費', '保険料', '租税公課',
+  '減価償却費', '福利厚生費', '諸会費', '雑費', '本部経費（按分）',
+  'その他売上', '銀行返済', '仕入（食材・飲料）', '運営委託費'
+];
+/* 費目名からの科目推定（「既定値の自動提案」①項目名からの推定）。よくある表記のキーワード一致のみ。
+ * ここに無ければ提案なし（空欄のまま・人が選ぶ）＝過剰な誤爆推定はしない。 */
+var SD_ACCOUNT_GUESS_ = [
+  [/電気|ガス|水道/, '水道光熱費'], [/インターネット|電話|通信|プロバイダ/, '通信費'],
+  [/家賃|賃料/, '家賃'], [/リース/, 'リース料'],
+  [/広告|求人|採用媒体/, '広告宣伝費'], [/販促|クーポン|チラシ/, '販売促進費'],
+  [/仕入|食材|飲料|GOSSO/, '仕入（食材・飲料）'], [/清掃|衛生|害虫/, '衛生管理費'],
+  [/修繕|修理/, '修繕費'], [/カード手数料|決済手数料/, 'カード手数料'], [/振込手数料|銀行手数料/, '支払手数料'],
+  [/税理士|社労士|顧問料|報酬/, '支払報酬料'], [/研修|教育/, '採用教育費'],
+  [/接待|交際/, '接待交際費'], [/会議|打合せ/, '会議費'], [/保険/, '保険料'],
+  [/租税|税金|印紙/, '租税公課'], [/福利厚生/, '福利厚生費'], [/会費/, '諸会費'],
+  [/消耗品|備品/, '消耗品・備品費']
+];
+function sd_guessAccount_(item) {
+  var s = String(item || '');
+  for (var i = 0; i < SD_ACCOUNT_GUESS_.length; i++) if (SD_ACCOUNT_GUESS_[i][0].test(s)) return SD_ACCOUNT_GUESS_[i][1];
+  return '';
+}
+/* 勘定科目・補助科目列（無ければヘッダー行の末尾に自動作成）。sd_updateRowの「修正日列が無ければ
+ * 自動作成」と同じ自己修復パターン。書き込み系API（sd_addRows/sd_updateRow/sd_bulkAdd/
+ * sd_bulkCategorize）から呼ぶこと。 */
+function sd_ensureCategoryCols_(db) {
+  var cm = db.colMap;
+  if (cm.account && cm.subAccount) return;
+  var sh = SpreadsheetApp.getActive().getSheetByName(db.sheet);
+  var width = 0;
+  Object.keys(cm).forEach(function (k) { if (cm[k] > width) width = cm[k]; });
+  if (!cm.account) { width++; sh.getRange(db.headerRow, width).setValue('勘定科目'); cm.account = width; }
+  if (!cm.subAccount) { width++; sh.getRange(db.headerRow, width).setValue('補助科目'); cm.subAccount = width; }
+}
+/* 「既定値の自動提案」②前月の同項目の科目を引き継ぐ。直近で同じ費目名に付けた科目・補助科目を
+ * そのDBシートの全行から探す（月をまたいでも一番新しい行を優先＝実質「前回選んだもの」）。 */
+function sd_suggestAccount(token, store, item) {
+  sd_auth_(token, true);
+  var det = sd_detect_();
+  var cfg = sd_config_(sd_masterStores_(det), det);
+  var st = null;
+  cfg.forEach(function (s) { if (s.name === store) st = s; });
+  if (!st || !st.db) return { account: sd_guessAccount_(item), subAccount: '', source: 'guess' };
+  var rows = sd_readRows_(st.db).filter(function (r) { return sd_norm_(r.item) === sd_norm_(item) && r.account && r.account !== '対象外'; });
+  if (rows.length) {
+    // rowはシート上の行番号順（＝入力順）で並んでいるはずなので、末尾＝最新とみなす
+    var last = rows[rows.length - 1];
+    return { account: last.account, subAccount: last.subAccount || '', source: 'history' };
+  }
+  var guess = sd_guessAccount_(item);
+  return { account: guess, subAccount: '', source: guess ? 'guess' : 'none' };
+}
+/* さかのぼり付与モード（Q4確定仕様）: 指定店舗・期間内の「勘定科目が空の行」に、既定値の自動提案
+ * （履歴引き継ぎ→キーワード推定の順）をまとめて書き込む。判定に迷う行（提案が無い行）は空欄のまま
+ * 残し、人が「明細を入力」画面の✏修正から確認・修正する（＝全自動で確定させない）。 */
+function sd_bulkCategorize(token, payload) {
+  var user = sd_auth_(token, true);
+  var storeName = String((payload || {}).store || '').trim();
+  var fromMonth = String((payload || {}).fromMonth || '').trim();
+  var toMonth = String((payload || {}).toMonth || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(fromMonth) || !/^\d{4}-\d{2}$/.test(toMonth)) throw new Error('対象期間が不正です');
+  var det = sd_detect_();
+  var cfg = sd_config_(sd_masterStores_(det), det);
+  var targets = storeName ? cfg.filter(function (s) { return s.name === storeName; }) : cfg;
+  if (storeName && !targets.length) throw new Error('店舗が見つかりません: ' + storeName);
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(30000);
+  try {
+    var results = [];
+    targets.forEach(function (st) {
+      if (!st.db) { results.push(st.name + ': DBシート未検出のためスキップ'); return; }
+      sd_ensureCategoryCols_(st.db);
+      var sh = SpreadsheetApp.getActive().getSheetByName(st.db.sheet);
+      var cm = st.db.colMap;
+      var rows = sd_readRows_(st.db).filter(function (r) { return r.ym >= fromMonth && r.ym <= toMonth; });
+      // 履歴引き継ぎは「その時点までに確定している一番新しい科目」を使う（月の並び順どおりに処理）。
+      var lastAccountByItem = {};
+      // 期間より前の既存の科目も引き継ぎ元にする
+      sd_readRows_(st.db).filter(function (r) { return r.ym < fromMonth && r.account && r.account !== '対象外'; })
+        .forEach(function (r) { lastAccountByItem[sd_norm_(r.item)] = { account: r.account, subAccount: r.subAccount }; });
+      var filled = 0, skipped = 0;
+      rows.sort(function (a, b) { return a.row - b.row; }).forEach(function (r) {
+        if (r.account) { // 既に付いている行は履歴の元として使うだけ・上書きしない
+          if (r.account !== '対象外') lastAccountByItem[sd_norm_(r.item)] = { account: r.account, subAccount: r.subAccount };
+          skipped++; return;
+        }
+        var key = sd_norm_(r.item);
+        var pick = lastAccountByItem[key] || (sd_guessAccount_(r.item) ? { account: sd_guessAccount_(r.item), subAccount: '' } : null);
+        if (!pick) { skipped++; return; }
+        sh.getRange(r.row, cm.account).setValue(pick.account);
+        if (pick.subAccount) sh.getRange(r.row, cm.subAccount).setValue(pick.subAccount);
+        lastAccountByItem[key] = pick;
+        filled++;
+      });
+      if (filled) sd_clearRowsCache_(st.db.sheet);
+      results.push(st.name + ': ' + filled + '件に科目を付与（' + skipped + '件はスキップ＝既に科目あり or 提案なし）');
+    });
+    sd_log_('さかのぼり科目付与', storeName || '全店', fromMonth + '〜' + toMonth, results.join(' / '), '', '', user.name, '');
+    return { ok: true, results: results };
+  } finally {
+    lock.releaseLock();
+  }
+}
+/* tori-dashboardのsyncSeisanCategoriesToPlから呼ばれる専用API（PL_SYNC_TOKEN認証・
+ * sd_apiTransferExと同じ方式）。指定店舗・月の明細を勘定科目×補助科目で集計して返す。
+ * 「対象外」「運営委託費」（＝既存のsyncSeisanFeeToPl連携と役割が重複）は除外する
+ * （設計書§4「新連携は対象外・運営委託費以外の科目のみを送る」）。
+ * 未確定の金額を送らないよう、sd_apiTransferExと同じく振込済み（sd_isLocked_）の月だけを対象にする。 */
+function sd_apiCategorizedLines(token, store, monthKey) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  var got = String(token || '').trim(), want = String(tk || '').trim();
+  if (!tk || got !== want) throw new Error('unauthorized');
+  var det = sd_detect_();
+  var cfg = sd_config_(sd_masterStores_(det), det);
+  var st = null;
+  cfg.forEach(function (s) { if (s.name === store) st = s; });
+  if (!st) return { found: false, reason: '店舗マスタに「' + store + '」という名前が見つかりません' };
+  if (!st.db) return { found: false, reason: 'データシートが自動特定できていません' };
+  var rows = sd_readRows_(st.db).filter(function (r) { return r.ym === monthKey; });
+  if (!rows.length) return { found: true, hasSales: false, reason: monthKey + '分の明細が0件でした' };
+  var paid = sd_isLocked_(store, monthKey);
+  if (!paid) return { found: true, hasSales: true, paid: false, reason: monthKey + '分はまだ振込済みではありません（未確定のためPL反映対象外）', lines: [] };
+  var taxRate = { '10%': 1.1, '8%': 1.08, '非課税': 1 };
+  var agg = {};
+  rows.forEach(function (r) {
+    var account = String(r.account || '').trim();
+    if (!account || account === '対象外' || account === '運営委託費') return;
+    var sub = String(r.subAccount || '').trim();
+    var rate = taxRate[sd_norm_(r.tax)] || 1.1;
+    var key = account + '\t' + sub;
+    agg[key] = (agg[key] || 0) + (Number(r.amount) || 0) / rate;
+  });
+  var lines = Object.keys(agg).map(function (k) {
+    var p = k.split('\t');
+    return { account: p[0], subAccount: p[1], amountEx: Math.round(agg[k]) };
+  });
+  return { found: true, hasSales: true, paid: true, lines: lines };
+}
+
 /* DBシートへの行追加（共通） */
 function sd_appendRows_(db, ymDate, rows, editor) {
   var sh = SpreadsheetApp.getActive().getSheetByName(db.sheet);
@@ -1378,6 +1544,8 @@ function sd_appendRows_(db, ymDate, rows, editor) {
     if (cm.note) arr[cm.note - 1] = String(r.note || '');
     if (cm.editor) arr[cm.editor - 1] = String(editor || '');
     if (cm.at) arr[cm.at - 1] = atStr;
+    if (cm.account) arr[cm.account - 1] = String(r.account || '');
+    if (cm.subAccount) arr[cm.subAccount - 1] = String(r.subAccount || '');
     return arr;
   });
   sh.getRange(lastData + 1, 1, out.length, width).setValues(out);
@@ -2290,7 +2458,8 @@ function sd_bulkAdd(token, payload) {
       if (!months.length) throw new Error('🔒 指定された月はすべて振込済みでロックされています（マスターアカウントが必要です）');
     }
 
-    var row = { kubun: payload.kubun || '変動費', item: item, amount: amt, tax: payload.tax || '10%', note: payload.note || '一括計上' };
+    sd_ensureCategoryCols_(st.db);
+    var row = { kubun: payload.kubun || '変動費', item: item, amount: amt, tax: payload.tax || '10%', note: payload.note || '一括計上', account: payload.account || '', subAccount: payload.subAccount || '' };
     months.forEach(function (mk) {
       sd_appendRows_(st.db, sd_monthKeyToDate_(mk), [row], user.name);
     });

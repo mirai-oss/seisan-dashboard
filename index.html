@@ -89,7 +89,7 @@
   .settle-entry-banner{background:#eef4ff;border:1px solid #bed2ff;border-radius:9px;padding:10px 12px;color:#2f65c8;font-size:10px;margin-bottom:12px}.settle-entry-banner b{font-size:16px}
   .settle-entry-card{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 6px 24px rgba(42,36,30,.05);padding:14px}
   .settle-entry-top{display:grid;grid-template-columns:180px 180px 180px;gap:10px;margin-bottom:12px}.settle-entry-top label,.settle-form-row label{display:block;color:var(--muted);font-size:9px;margin-bottom:4px}.settle-entry-top select,.settle-entry-top input,.settle-form-row input,.settle-form-row select{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px;background:#fff}
-  .settle-form-head,.settle-form-row{display:grid;grid-template-columns:110px minmax(180px,1.2fr) 140px 90px minmax(180px,1.4fr) 180px 30px;gap:8px;align-items:center}
+  .settle-form-head,.settle-form-row{display:grid;grid-template-columns:100px minmax(160px,1.1fr) 130px 110px 90px 70px minmax(140px,1.2fr) 150px 28px;gap:8px;align-items:center}
   .settle-form-head{padding:8px;color:var(--muted);font-size:9px;font-weight:700}.settle-form-row{padding:7px;border-bottom:1px solid var(--line)}
   .settle-file{border:1px solid var(--line);border-radius:8px;padding:5px;font-size:9px;background:#faf8f5;overflow:hidden}
   .settle-entry-actions{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-top:12px}
@@ -107,10 +107,10 @@
   .settle-history-list{display:grid;gap:8px}
   .settle-history-item{border:1px solid var(--line);border-radius:9px;padding:9px;background:#faf8f5}
   .settle-history-item b{font-size:11px}.settle-history-item p{font-size:10px;color:var(--muted);margin:3px 0 0;line-height:1.5}
-  @media(max-width:1200px){.settle-summary{grid-template-columns:repeat(3,1fr)}.settle-storegrid{grid-template-columns:1fr 1fr}.settle-form-head,.settle-form-row{grid-template-columns:90px minmax(150px,1fr) 110px 80px minmax(150px,1fr) 130px 28px}}
+  @media(max-width:1200px){.settle-summary{grid-template-columns:repeat(3,1fr)}.settle-storegrid{grid-template-columns:1fr 1fr}.settle-form-head,.settle-form-row{grid-template-columns:80px minmax(130px,1fr) 110px 90px 80px 60px minmax(110px,1fr) 120px 28px}}
   @media(max-width:760px){
     .settle-summary{grid-template-columns:1fr 1fr}.settle-storegrid,.settle-setting-grid{grid-template-columns:1fr}.settle-entry-top{grid-template-columns:1fr}
-    .settle-form-head{display:none}.settle-form-row{display:grid;grid-template-columns:1fr 1fr;padding:10px}.settle-form-row>div:nth-child(2),.settle-form-row>div:nth-child(5),.settle-form-row>div:nth-child(6){grid-column:1/-1}
+    .settle-form-head{display:none}.settle-form-row{display:grid;grid-template-columns:1fr 1fr;padding:10px}.settle-form-row>div:nth-child(2),.settle-form-row>div:nth-child(7),.settle-form-row>div:nth-child(8){grid-column:1/-1}
     .settle-corphead{display:block}.settle-corp-total{text-align:left;margin-top:8px}
   }
 
@@ -277,14 +277,14 @@
           <div><label>入力者</label><input id="in-editor" placeholder="例: 中山" oninput="localStorage.setItem('sd_editor',this.value)"></div>
         </div>
         <div id="entry-card">
-          <div class="settle-form-head"><div>区分</div><div>費目名</div><div>金額（税込）</div><div>税率</div><div>備考</div><div>📎資料</div><div></div></div>
+          <div class="settle-form-head"><div>区分</div><div>費目名</div><div>勘定科目</div><div>補助科目</div><div>金額（税込）</div><div>税率</div><div>備考</div><div>📎資料</div><div></div></div>
           <div id="entry-rows"></div>
           <div class="settle-entry-actions">
             <button class="btn" onclick="addEntryRow()">＋ 行を追加</button>
             <button class="btn primary" id="submit-btn" onclick="submitRows()">この内容で登録する</button>
           </div>
         </div>
-        <p class="muted" style="margin-top:10px">マイナス金額（返金・調整）も入力できます。各行にファイルを添付すると、登録時に「費目名_年.月_店舗名」に自動リネームしてDriveに保存します。</p>
+        <p class="muted" style="margin-top:10px">マイナス金額（返金・調整）も入力できます。各行にファイルを添付すると、登録時に「費目名_年.月_店舗名」に自動リネームしてDriveに保存します。<br>勘定科目を選ぶと（固定ロイヤリティ等は「対象外」のまま）、振込済み確定後に店舗PLへ自動で反映されます。費目名を入れると前回選んだ科目・無ければキーワードから自動で候補を入れます（選び直せます）。</p>
         <div class="existing" style="margin-top:18px">
           <div style="font-size:12px;font-weight:700;color:var(--muted)" id="existing-title"></div>
           <div class="settle-tablewrap" style="margin-top:8px"><table class="settle-table" id="existing-table"></table></div>
@@ -336,6 +336,10 @@
           <button class="btn primary sm" onclick="testChatwork()">📨 テスト送信</button>
         </div>
         <p class="muted" style="margin-top:6px">「設定_外部連携」シートの「ChatWork APIトークン」「ChatWorkルームID（振込リマインド用）」を設定した後、ここでテスト送信して届くか確認できます。</p>
+      </div>
+      <div class="settle-setting" style="margin-top:12px">
+        <h3>🔙 過去の精算書に勘定科目をまとめて付与</h3><p>さかのぼり付与モード（A-9）。指定した期間内の「まだ科目が付いていない」行に、前回選んだ科目→キーワード推定の順で自動セットします（判定できない行は空欄のまま残り、あとで手動確認）。実行後は各店舗の「明細を入力」タブで内容を確認・修正してください。</p>
+        <button class="btn primary sm" onclick="openBulkCategorizeModal()">対象期間を選んで実行</button>
       </div>
     </div>
   </div>
@@ -1136,10 +1140,11 @@ function renderExisting(){
             : '<button class="settle-editbtn" onclick="deleteRow('+i+')">🗑 削除</button>')
         : '';
       var attach = attachCellHtml(matchAttachFiles(r.item, mk, st.name, files));
-      return '<tr><td>'+editBtn+' '+delBtn+'</td><td>'+esc(r.kubun)+'</td><td>'+esc(r.item)+'</td><td style="text-align:right">'+yen(r.amount)+'</td><td>'+esc(r.tax)+'</td><td>'+esc(r.note)+'</td><td>'+attach+'</td><td>'+esc(r.editor)+'</td><td>'+esc(r.at)+'</td><td>'+esc(r.edited||'')+'</td></tr>';
+      var accHtml = r.account ? esc(r.account)+(r.subAccount?'<br><span class="muted">'+esc(r.subAccount)+'</span>':'') : '<span class="muted">－</span>';
+      return '<tr><td>'+editBtn+' '+delBtn+'</td><td>'+esc(r.kubun)+'</td><td>'+esc(r.item)+'</td><td>'+accHtml+'</td><td style="text-align:right">'+yen(r.amount)+'</td><td>'+esc(r.tax)+'</td><td>'+esc(r.note)+'</td><td>'+attach+'</td><td>'+esc(r.editor)+'</td><td>'+esc(r.at)+'</td><td>'+esc(r.edited||'')+'</td></tr>';
     }).join('');
   }
-  var head='<tr><th style="width:130px"></th><th>区分</th><th>費目名</th><th>金額</th><th>税率</th><th>備考</th><th>📎資料</th><th>入力者</th><th>入力日</th><th>修正日</th></tr>';
+  var head='<tr><th style="width:130px"></th><th>区分</th><th>費目名</th><th>勘定科目</th><th>金額</th><th>税率</th><th>備考</th><th>📎資料</th><th>入力者</th><th>入力日</th><th>修正日</th></tr>';
   if(!rows.length){ tbl.innerHTML='<tr><td class="muted">まだ入力がありません</td></tr>'; }
   else{
     tbl.innerHTML=head+buildRows(null); // 先に添付なしで即表示 → 取得できたら差し替え
@@ -1165,11 +1170,14 @@ function openEditRow(rowIdx){
   var d=state.data;
   var kuOpts=d.kubunOptions.map(function(k){return '<option'+(k===r.kubun?' selected':'')+'>'+esc(k)+'</option>';}).join('');
   var taxOpts=d.taxOptions.map(function(t){return '<option'+(t===r.tax?' selected':'')+'>'+esc(t)+'</option>';}).join('');
+  var accOpts=(d.accountOptions||[]).map(function(a){return '<option'+(a===r.account?' selected':'')+'>'+esc(a)+'</option>';}).join('');
   var body='<p class="muted" style="margin-bottom:10px">'+esc(st.name)+'　'+mLabel(state.month)+'分 ／ 入力: '+esc(r.editor||'-')+'（'+esc(r.at||'-')+'）'+(r.edited?' ／ 前回修正: '+esc(r.edited):'')+'</p>'
     +'<div class="settle-entry-top" style="grid-template-columns:1fr 1fr"><div><label>区分</label><select id="ed-kubun">'+kuOpts+'</select></div>'
     +'<div><label>税率</label><select id="ed-tax">'+taxOpts+'</select></div></div>'
     +'<div class="settle-entry-top" style="grid-template-columns:2fr 1fr"><div><label>費目名</label><input id="ed-item" value="'+esc(r.item)+'"></div>'
     +'<div><label>金額（税込）</label><input id="ed-amount" inputmode="numeric" value="'+r.amount+'"></div></div>'
+    +'<div class="settle-entry-top" style="grid-template-columns:1fr 1fr"><div><label>勘定科目（PL連携用。ロイヤリティ等は「対象外」）</label><select id="ed-account">'+accOpts+'</select></div>'
+    +'<div><label>補助科目（任意）</label><input id="ed-subaccount" value="'+esc(r.subAccount||'')+'"></div></div>'
     +'<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>備考</label><input id="ed-note" value="'+esc(r.note||'')+'"></div></div>'
     +'<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>📎 資料を追加/差し替え（任意）</label><input type="file" id="ed-file"></div></div>'
     +'<p class="muted">ファイルを選ぶと、この費目名で保存します。同名の資料が既にある場合は上書きせず「【再】…」で保存され、修正版だとわかります。</p>';
@@ -1190,7 +1198,8 @@ function saveEditRow(rowIdx){
   var storeName=st.name, month=state.month;
   timedApiAuth('修正','sd_updateRow',{store:storeName,row:r.row,orig:{item:r.item,amount:r.amount},
     kubun:document.getElementById('ed-kubun').value,item:item,amount:Number(amount),
-    tax:document.getElementById('ed-tax').value,note:document.getElementById('ed-note').value.trim()})
+    tax:document.getElementById('ed-tax').value,note:document.getElementById('ed-note').value.trim(),
+    account:document.getElementById('ed-account').value,subAccount:document.getElementById('ed-subaccount').value.trim()})
     .then(function(t){
       if(!file){ loading(false); toast('✏ 修正しました（修正日を記録）'+t.summary); loadDashboard(month,true); return; }
       loading(true,'資料をアップロード中…');
@@ -1233,14 +1242,30 @@ function addEntryRow(){
   var d=state.data;
   var row=document.createElement('div');
   row.className='settle-form-row';
+  var accOpts=(d.accountOptions||['対象外']).map(function(a){return '<option'+(a==='対象外'?' selected':'')+'>'+esc(a)+'</option>';}).join('');
   row.innerHTML='<div><select class="f-kubun">'+d.kubunOptions.map(function(k){return '<option'+(k==='変動費'?' selected':'')+'>'+esc(k)+'</option>';}).join('')+'</select></div>'
-    +'<div><input class="f-item" placeholder="例: ガス料金"></div>'
+    +'<div><input class="f-item" placeholder="例: ガス料金" onblur="suggestAccountForRow(this)"></div>'
+    +'<div><select class="f-account">'+accOpts+'</select></div>'
+    +'<div><input class="f-subaccount" placeholder="任意"></div>'
     +'<div><input class="f-amount" inputmode="numeric" placeholder="0"></div>'
     +'<div><select class="f-tax">'+d.taxOptions.map(function(t){return '<option>'+esc(t)+'</option>';}).join('')+'</select></div>'
     +'<div><input class="f-note" placeholder="根拠資料名など"></div>'
     +'<div class="settle-file"><input type="file" class="f-file"></div>'
     +'<button class="btn sm" title="行を削除" onclick="this.parentElement.remove()">×</button>';
   document.getElementById('entry-rows').appendChild(row);
+}
+/* 費目名を入力し終えたら、その店舗で前回選んだ科目（無ければキーワード推定）を自動セットする
+ * （「既定値の自動提案」。ユーザーは選び直せる＝勝手に確定はしない）。 */
+function suggestAccountForRow(itemInput){
+  var item=itemInput.value.trim();
+  if(!item) return;
+  var row=itemInput.closest('.settle-form-row');
+  var accSel=row.querySelector('.f-account'), subInp=row.querySelector('.f-subaccount');
+  var store=document.getElementById('in-store').value;
+  apiAuth('sd_suggestAccount', store, item).then(function(res){
+    if(!res||!res.account) return;
+    if(accSel.value==='対象外' && !subInp.value){ accSel.value=res.account; subInp.value=res.subAccount||''; }
+  }).catch(function(){ /* 提案の取得失敗は無視（手動選択できるため） */ });
 }
 function collectRows(){
   var out=[];
@@ -1254,7 +1279,8 @@ function collectRows(){
     if(!item && !amtRaw && !file) continue;
     if(!item) throw new Error((i+1)+'行目: 費目名が空です');
     if(amtRaw===''||isNaN(Number(amtRaw))) throw new Error((i+1)+'行目「'+item+'」: 金額が数値ではありません');
-    out.push({kubun:row.querySelector('.f-kubun').value,item:item,amount:Number(amtRaw),tax:row.querySelector('.f-tax').value,note:row.querySelector('.f-note').value.trim(),file:file});
+    out.push({kubun:row.querySelector('.f-kubun').value,item:item,amount:Number(amtRaw),tax:row.querySelector('.f-tax').value,note:row.querySelector('.f-note').value.trim(),
+      account:row.querySelector('.f-account').value,subAccount:row.querySelector('.f-subaccount').value.trim(),file:file});
   }
   return out;
 }
@@ -1278,7 +1304,7 @@ function submitRows(force){
   var total=rows.reduce(function(a,r){return a+r.amount;},0);
   var fileNote=files.length?'\n添付 '+files.length+'件も一緒にアップロードします。':'';
   if(!force && !confirm('【確認】\n'+mLabel(month)+'分 ／ '+store+'\n明細 '+rows.length+'件（合計 '+yen(total)+'）を登録します。'+fileNote+'\nよろしいですか？')) return;
-  var rowsForApi=rows.map(function(r){return {kubun:r.kubun,item:r.item,amount:r.amount,tax:r.tax,note:r.note};});
+  var rowsForApi=rows.map(function(r){return {kubun:r.kubun,item:r.item,amount:r.amount,tax:r.tax,note:r.note,account:r.account,subAccount:r.subAccount};});
   var btn=document.getElementById('submit-btn');
   btn.disabled=true; loading(true,'登録中…'); perfOpStart('登録');
   var t0=performance.now();
@@ -1619,6 +1645,34 @@ function submitBulk(){
 function addMonthStr(key,n){
   var p=key.split('-'); var dt=new Date(Number(p[0]),Number(p[1])-1+n,1);
   return dt.getFullYear()+'-'+('0'+(dt.getMonth()+1)).slice(-2);
+}
+
+/* ===== A-9: さかのぼり付与モード（過去の精算書に勘定科目を一括セット） ===== */
+function openBulkCategorizeModal(){
+  var d=state.data;
+  var stOpts='<option value="">全店舗</option>'+d.stores.map(function(s){return '<option>'+esc(s.name)+'</option>';}).join('');
+  var mOpts=d.months.map(function(mk){return '<option value="'+mk+'">'+mLabel(mk)+'</option>';}).join('');
+  var body='<p class="muted" style="margin-bottom:10px">対象期間の「まだ科目が付いていない」明細だけに自動で科目をセットします（既に科目が付いている行は変更しません）。まず今期分など短い期間で試すのがおすすめです。</p>'
+    +'<div class="settle-entry-top"><div><label>店舗</label><select id="bc-store">'+stOpts+'</select></div>'
+    +'<div><label>開始月</label><select id="bc-from">'+mOpts+'</select></div>'
+    +'<div><label>終了月</label><select id="bc-to">'+mOpts+'</select></div></div>';
+  openModal('🔙 過去の精算書に科目を一括付与', body,
+    '<button class="btn primary" onclick="submitBulkCategorize()">実行する</button><button class="btn" onclick="closeModal()">閉じる</button>');
+  document.getElementById('bc-from').value=state.month;
+  document.getElementById('bc-to').value=state.month;
+}
+function submitBulkCategorize(){
+  var store=document.getElementById('bc-store').value;
+  var fromMonth=document.getElementById('bc-from').value;
+  var toMonth=document.getElementById('bc-to').value;
+  if(fromMonth>toMonth){ toast('開始月が終了月より後になっています'); return; }
+  if(!confirm((store||'全店舗')+'\n'+mLabel(fromMonth)+'〜'+mLabel(toMonth)+'の未分類の明細に、科目を自動セットします。\nよろしいですか？')) return;
+  closeModal(); loading(true,'科目を付与中…（明細が多いと時間がかかります）');
+  apiAuth('sd_bulkCategorize',{store:store,fromMonth:fromMonth,toMonth:toMonth}).then(function(res){
+    loading(false);
+    toast('✅ '+res.results.join(' ／ '), 8000);
+    invalidateCache();
+  }).catch(function(e){ loading(false); toast('エラー: '+(e.message||e)); });
 }
 
 /* ===== 設定（アカウント・法人・ロイヤリティ・定期費目・自動処理権限） ===== */
