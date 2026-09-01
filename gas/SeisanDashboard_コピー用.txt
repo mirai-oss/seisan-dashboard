@@ -48,7 +48,7 @@ var SD_API_WHITELIST = [
   'sd_getPdfB64', 'sd_updateCheckSheet', 'sd_bulkAdd', 'sd_getSettings',
   'sd_saveAccount', 'sd_saveCorp', 'sd_testChatwork', 'sd_apiTransferEx',
   'sd_saveStoreRate', 'sd_saveRecurStatus', 'sd_saveOpsSettings', 'sd_getOpsSettings',
-  'sd_suggestAccount', 'sd_bulkCategorize', 'sd_apiCategorizedLines'
+  'sd_suggestAccount', 'sd_bulkCategorize', 'sd_apiCategorizedLines', 'sd_apiAddExternalLine'
 ];
 
 function sd_apiFnMap_() {
@@ -65,7 +65,7 @@ function sd_apiFnMap_() {
     sd_saveStoreRate: sd_saveStoreRate, sd_saveRecurStatus: sd_saveRecurStatus,
     sd_saveOpsSettings: sd_saveOpsSettings, sd_getOpsSettings: sd_getOpsSettings,
     sd_suggestAccount: sd_suggestAccount, sd_bulkCategorize: sd_bulkCategorize,
-    sd_apiCategorizedLines: sd_apiCategorizedLines
+    sd_apiCategorizedLines: sd_apiCategorizedLines, sd_apiAddExternalLine: sd_apiAddExternalLine
   };
 }
 
@@ -1544,6 +1544,71 @@ function sd_apiCategorizedLines(token, store, monthKey) {
     return { account: p[0], subAccount: p[1], amountEx: Math.round(agg[k]) };
   });
   return { found: true, hasSales: true, paid: true, lines: lines };
+}
+
+/* API: 外部（tori-dashboard・A-8拡張の勘定科目汎用アクション）から精算書へ明細を自動追加/更新する
+ * （設計書_広告費自動連携と精算書PL科目連携_2026-08-31.md §5）。sd_apiCategorizedLinesと同じ
+ * PL_SYNC_TOKEN認証（ログイン不要・サーバー間呼び出し用）。カード手数料・PayPay手数料など、MF会計
+ * 仕訳側で確定した経費を、精算対象店舗の精算書明細へ自動反映するために使う。
+ * line.sourceKey（例: 'mf-journal:12345'）で冪等：同じsourceKeyの行（noteに保存）は金額等を上書き、
+ * 無ければ新規追加。同じ仕訳から二重に呼ばれても行が増えない。
+ * 振込済み（ロック中）の月は追加・更新できない（確定済みの精算書を後から書き換えないため）。
+ * 呼び出し例: POST {fn:'sd_apiAddExternalLine', args:[token, store, monthKey,
+ *   {item, amount, tax, account, subAccount, sourceKey}]} */
+function sd_apiAddExternalLine(token, store, monthKey, line) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  var got = String(token || '').trim(), want = String(tk || '').trim();
+  if (!tk || got !== want) return { ok: false, error: 'unauthorized' };
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey || ''))) return { ok: false, error: '年月が不正です（例: 2026-08）' };
+  line = line || {};
+  var item = String(line.item || '').trim();
+  if (!item) return { ok: false, error: '費目名（item）が空です' };
+  var amount = Number(line.amount);
+  if (!isFinite(amount) || amount < 0) return { ok: false, error: '金額が不正です' };
+  var account = String(line.account || '').trim();
+  if (!account) return { ok: false, error: '勘定科目（account）が空です' };
+  var sourceKey = String(line.sourceKey || '').trim().slice(0, 80);
+  if (!sourceKey) return { ok: false, error: 'sourceKey（冪等キー）が空です' };
+  var noteTag = '外部連携:' + sourceKey;
+
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(20000);
+  try {
+    var det = sd_detect_();
+    var cfg = sd_config_(sd_masterStores_(det), det);
+    var st = null;
+    cfg.forEach(function (s) { if (s.name === store) st = s; });
+    if (!st) return { ok: false, error: '店舗マスタに「' + store + '」という名前が見つかりません' };
+    if (!st.db) return { ok: false, error: '店舗「' + store + '」のDBシートが見つかりません' };
+    if (sd_isLocked_(store, monthKey)) {
+      return { ok: false, error: monthKey + '分は振込済み（確定済み）のため自動追加できません', locked: true };
+    }
+    sd_ensureCategoryCols_(st.db);
+
+    // 同じsourceKey（note列に保存）の行が既にあれば上書き（冪等）。無ければ新規追加。
+    var rows = sd_readRows_(st.db).filter(function (r) { return r.ym === monthKey && r.note === noteTag; });
+    if (rows.length) {
+      var sh = SpreadsheetApp.getActive().getSheetByName(st.db.sheet);
+      var cm = st.db.colMap;
+      var target = rows[0].row;
+      sh.getRange(target, cm.item).setValue(item);
+      sh.getRange(target, cm.amount).setValue(amount);
+      if (cm.tax) sh.getRange(target, cm.tax).setValue(line.tax || '10%');
+      if (cm.account) sh.getRange(target, cm.account).setValue(account);
+      if (cm.subAccount) sh.getRange(target, cm.subAccount).setValue(String(line.subAccount || ''));
+      sd_clearRowsCache_(st.db.sheet);
+      return { ok: true, row: target, updated: true };
+    }
+    var ymDate = sd_monthKeyToDate_(monthKey);
+    sd_appendRows_(st.db, ymDate, [{
+      kubun: '変動費', item: item, amount: amount, tax: line.tax || '10%',
+      note: noteTag, account: account, subAccount: String(line.subAccount || '')
+    }], '自動連携（A-8）');
+    sd_clearRowsCache_(st.db.sheet);
+    return { ok: true, updated: false };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /* DBシートへの行追加（共通） */
