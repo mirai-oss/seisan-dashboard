@@ -364,6 +364,37 @@ var GAS_API_URL = 'https://script.google.com/macros/s/AKfycbzwYN9uSEtcJHSKSVQCoQ
 
 var state = { token: localStorage.getItem('sd_token')||'', month:'', data:null };
 
+/* ===== ns-portal統合ポータルシェルへの埋め込み対応（W2-A・2026-09-02追加） =====
+ * tori-dashboard(app.js)のF-3と全く同じパターン。?embed=1で自画面の見出しを非表示、
+ * ?view=でログイン後に開く画面を直接指定（例: ?embed=1&view=corp）。
+ * さらにportal.html側がiframeを作り直さずpostMessage({type:'nsPortalSetTab',tab:'corp'})で
+ * 画面切替だけ指示できるようにする（担当A依頼「画面切替の高速化」・keiei/nippo/cockpitと同じ
+ * 受け口）。これによりportal側から精算ダッシュボードへ再訪問した際も既存のdashCache（月別
+ * キャッシュ）がそのまま生きた状態で瞬時に表示できる（iframe自体を作り直さない前提）。 */
+var EMBED_MODE=false, PENDING_VIEW='';
+var SEISAN_VIEWS_=['check','corp','annual','input','settings'];
+try{
+  var q0=new URLSearchParams(location.search);
+  if(q0.get('embed')==='1') EMBED_MODE=true;
+  PENDING_VIEW=q0.get('view')||'';
+}catch(e){}
+window.addEventListener('message', function(ev){
+  if(ev.origin!=='https://mirai-oss.github.io') return;
+  var data=ev.data;
+  if(!data||data.type!=='nsPortalSetTab'||typeof data.tab!=='string') return;
+  if(SEISAN_VIEWS_.indexOf(data.tab)<0) return;
+  if(state.data) showView(data.tab); else PENDING_VIEW=data.tab; // ログイン未完了ならログイン後に適用
+});
+/* ログイン成功後の共通処理（doLogin/trySilentPortalLogin/doSsoLogin/セッション復元の4箇所から呼ぶ）。
+ * embed時はここでヘッダーの見出しを消し、pending viewがあれば最初からその画面を開く。 */
+function enterApp_(){
+  document.getElementById('login-view').style.display='none';
+  document.getElementById('app-view').style.display='block';
+  if(EMBED_MODE){ try{ document.querySelector('header.app h1').style.display='none'; }catch(e){} }
+  loadDashboard(null);
+  if(PENDING_VIEW && SEISAN_VIEWS_.indexOf(PENDING_VIEW)>=0){ showView(PENDING_VIEW); }
+}
+
 /* ===== API（GASをJSONバックエンドとしてfetchで呼ぶ） =====
  * POSTを基本とし、ネットワークレベルで失敗した場合はGETに自動フォールバックする
  * （Apps ScriptはPOSTよりGETのクロスオリジン応答が安定しているため）。
@@ -538,9 +569,7 @@ function doLogin(){
     state.token=res.token;
     localStorage.setItem('sd_token', res.token);
     loading(false);
-    document.getElementById('login-view').style.display='none';
-    document.getElementById('app-view').style.display='block';
-    loadDashboard(null);
+    enterApp_();
   }).catch(function(e){ loading(false); document.getElementById('login-err').textContent=(e.message||e); });
 }
 function logout(){ showLogin('ログアウトしました'); }
@@ -578,9 +607,7 @@ function trySilentPortalLogin(){
       state.token=res.token;
       localStorage.setItem('sd_token', res.token);
       document.getElementById('login-err').textContent='';
-      document.getElementById('login-view').style.display='none';
-      document.getElementById('app-view').style.display='block';
-      loadDashboard(null);
+      enterApp_();
     }).catch(function(){ document.getElementById('login-err').textContent=''; });
   });
 }
@@ -609,9 +636,7 @@ function doSsoLogin(){
     state.token=res.token;
     localStorage.setItem('sd_token', res.token);
     loading(false);
-    document.getElementById('login-view').style.display='none';
-    document.getElementById('app-view').style.display='block';
-    loadDashboard(null);
+    enterApp_();
   }).catch(function(e){
     loading(false);
     var m=String(e.message||e);
@@ -1866,9 +1891,7 @@ function saveCorp(client){
 renderPerfPanel();
 /* ===== 起動 ===== */
 if(state.token){
-  document.getElementById('login-view').style.display='none';
-  document.getElementById('app-view').style.display='block';
-  loadDashboard(null);
+  enterApp_();
 } else {
   showLogin('');
   trySilentPortalLogin();   // ポータルでログイン済みならそのまま入る
