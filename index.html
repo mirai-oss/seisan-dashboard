@@ -663,7 +663,20 @@ function loadDashboard(monthKey, force){
     state.data=data; state.month=data.month;
     render();
     loading(false);
+    prefetchAdjacentMonths_(data.month);
   }).catch(function(e){ loading(false); perfOpEnd(); toast('読み込みエラー: '+(e.message||e)); });
+}
+// A-p1b（2026-09-02・実装指示書 §2）: 前月・翌月ボタン（‹ ›）を押した瞬間は毎回未取得月なので
+// 従来はそこだけ「読み込み中」が出ていた。表示が終わった直後に裏で前後1ヶ月分をこっそり
+// dashCacheへ入れておき、実際に‹ ›を押した時にはキャッシュ即表示（→背景で最新化）に乗せる。
+function prefetchAdjacentMonths_(monthKey){
+  [-1,1].forEach(function(n){
+    var p=monthKey.split('-');
+    var d=new Date(Number(p[0]), Number(p[1])-1+n, 1);
+    var k=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);
+    if(dashCache[k]) return; // 既にある月は再取得しない
+    apiAuth('sd_getDashboard', k).then(function(data){ dashCache[k]=data; dashCache[data.month]=data; }).catch(function(){ /* 先読み失敗は無視（実際に押された時に通常経路で取得し直す） */ });
+  });
 }
 function refreshInBackground(monthKey, key){
   apiAuth('sd_getDashboard', monthKey||null).then(function(data){
