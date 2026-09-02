@@ -385,18 +385,39 @@ function apiGet_(fn, args){
     return r.json();
   });
 }
+// A-p1d 計測フック（2026-09-02追加・実装指示書_脱GAS移行_Phase0-1）: tori-dashboard/app.jsのA-p0と
+// 同じ仕組み。レーンPが用意する予定のkeiei-api-perflogへnavigator.sendBeaconで送る。失敗しても
+// 画面には一切影響しない（受け皿が未完成の間も安全に無視される）。
+var PERF_LOG_URL='https://uuvsxzhpxtghojoubjcc.supabase.co/functions/v1/keiei-api-perflog';
+var PERF_LOG_ANON_KEY='sb_publishable_MrwPJAx_Ws_fdRutprKCiQ_dg3wCiTr';
+function logApiPerf_(actionName, ms, ok, errType){
+  try{
+    if(typeof navigator==='undefined'||!navigator.sendBeacon) return;
+    var payload=JSON.stringify({ app:'seisan-dashboard', action:actionName||'', ms:Math.round(ms), ok:!!ok, errType:errType||'', t:Date.now() });
+    navigator.sendBeacon(PERF_LOG_URL+'?apikey='+PERF_LOG_ANON_KEY, new Blob([payload], { type:'text/plain;charset=utf-8' }));
+  }catch(e){ /* 計測の失敗は握りつぶす */ }
+}
 function api(fn){
   var args = Array.prototype.slice.call(arguments,1);
   var argsStr = JSON.stringify(args);
   var canFallbackToGet = argsStr.length < 6500; // 大きなペイロード（添付ファイル等）はGET不可
+  var t0 = performance.now();
   return apiPost_(fn, args)
     .catch(function(e){
       if(!canFallbackToGet) throw e;
       return apiGet_(fn, args); // POSTがネットワークレベルで失敗 → GETで再試行
     })
     .then(function(res){
-      if(!res.ok){ throw new Error(res.error||'不明なエラー'); }
+      if(!res.ok){
+        logApiPerf_(fn, performance.now()-t0, false, 'api_error');
+        var err=new Error(res.error||'不明なエラー'); err._perfLogged=true; throw err;
+      }
+      logApiPerf_(fn, performance.now()-t0, true, '');
       return res.result;
+    })
+    .catch(function(e){
+      if(!(e && e._perfLogged)) logApiPerf_(fn, performance.now()-t0, false, 'network');
+      throw e;
     });
 }
 function apiAuth(fn){
