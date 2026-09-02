@@ -397,7 +397,7 @@ function logApiPerf_(actionName, ms, ok, errType){
     navigator.sendBeacon(PERF_LOG_URL+'?apikey='+PERF_LOG_ANON_KEY, new Blob([payload], { type:'text/plain;charset=utf-8' }));
   }catch(e){ /* 計測の失敗は握りつぶす */ }
 }
-function api(fn){
+function apiOnce_(fn){
   var args = Array.prototype.slice.call(arguments,1);
   var argsStr = JSON.stringify(args);
   var canFallbackToGet = argsStr.length < 6500; // 大きなペイロード（添付ファイル等）はGET不可
@@ -416,9 +416,23 @@ function api(fn){
       return res.result;
     })
     .catch(function(e){
-      if(!(e && e._perfLogged)) logApiPerf_(fn, performance.now()-t0, false, 'network');
+      if(!(e && e._perfLogged)){ logApiPerf_(fn, performance.now()-t0, false, 'network'); e._retriable=true; }
       throw e;
     });
+}
+// A-p1d 自動リトライ（2026-09-02追加・tori-dashboard/app.jsのA-p1cと同じ方針）: POST→GETの
+// フォールバックまで含めて両方ネットワークレベルで失敗した場合だけ、指数バックオフ
+// （0.5秒→1.5秒）で最大2回まで自動再試行する。アプリ側エラー（res.ok===false・ログイン失敗や
+// 権限エラー等）は再試行しても結果が変わらないためリトライしない。
+function api(fn){
+  var args = Array.prototype.slice.call(arguments,0);
+  function attempt(n){
+    return apiOnce_.apply(null, args).catch(function(e){
+      if(!e._retriable || n>=2) throw e;
+      return new Promise(function(res){ setTimeout(res, n===0?500:1500); }).then(function(){ return attempt(n+1); });
+    });
+  }
+  return attempt(0);
 }
 function apiAuth(fn){
   var args=[fn, state.token].concat(Array.prototype.slice.call(arguments,1));
