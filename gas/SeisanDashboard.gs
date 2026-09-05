@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.17-invoice-link';
+var SD_VERSION = 'v5.18-invoice-link-flushfix';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -1726,6 +1726,12 @@ function sd_mappingSheet_() {
     sh.getRange(1, 1, 1, SD_MAPPING_HEAD_.length).setValues([SD_MAPPING_HEAD_]);
     var seedRows = SD_MAPPING_SEED_.map(function (r) { return [r[0], r[1], r[2], r[3], r[4], Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd'), '(初期シード)']; });
     sh.getRange(2, 1, seedRows.length, SD_MAPPING_HEAD_.length).setValues(seedRows);
+    // 2026-09-05修正（実機E2Eで発覚した重大バグ）: insertSheet()直後にgetLastRow()を呼ぶと、
+    // 直前のsetValues()がまだ反映されておらず古い値（0等）を返すことがあるGASの既知の挙動により、
+    // 後続のsd_mappingRows_やsd_apiConfirmMappingの追記処理がヘッダー行(1行目)を追記のつもりで
+    // 上書きしてしまう事故が起きた（PL反映ログ側の同種バグで実機確認済み）。SpreadsheetApp.flush()で
+    // 書き込みを確定させてから返すことで、以降のgetLastRow()が正しい値を返すようにする。
+    SpreadsheetApp.flush();
   }
   return sh;
 }
@@ -1842,6 +1848,11 @@ function sd_plSyncLogSheet_() {
   if (!sh) {
     sh = ss.insertSheet(SD_PLSYNC_LOG_SHEET);
     sh.getRange(1, 1, 1, SD_PLSYNC_HEAD_.length).setValues([SD_PLSYNC_HEAD_]);
+    // 2026-09-05修正（実機E2Eで発覚した重大バグ）: sd_mappingSheet_と同じ理由でflush()が必要。
+    // これが無いと、直後のsd_plSyncLogSet_内のgetLastRow()が0を誤って返し、初回書き込みが
+    // ヘッダー行(1行目)を追記のつもりで上書きしてしまい、以降ずっと「同期ログが見つからない」
+    // （plStatusが常にPL同期待ちのまま進まない）という不具合になっていた。
+    SpreadsheetApp.flush();
   }
   return sh;
 }
