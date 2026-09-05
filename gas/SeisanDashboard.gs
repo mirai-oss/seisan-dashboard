@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.18-invoice-link-flushfix';
+var SD_VERSION = 'v5.19-debug-plsync';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -51,7 +51,8 @@ var SD_API_WHITELIST = [
   'sd_saveAccount', 'sd_saveCorp', 'sd_testChatwork', 'sd_apiTransferEx',
   'sd_saveStoreRate', 'sd_saveRecurStatus', 'sd_saveOpsSettings', 'sd_getOpsSettings',
   'sd_suggestAccount', 'sd_bulkCategorize', 'sd_apiCategorizedLines', 'sd_apiAddExternalLine',
-  'sd_apiGetLines', 'sd_apiMarkPlSynced', 'sd_apiSuggestMapping', 'sd_apiConfirmMapping'
+  'sd_apiGetLines', 'sd_apiMarkPlSynced', 'sd_apiSuggestMapping', 'sd_apiConfirmMapping',
+  'sd_apiDebugPlSyncSheet'
 ];
 
 function sd_apiFnMap_() {
@@ -70,7 +71,8 @@ function sd_apiFnMap_() {
     sd_suggestAccount: sd_suggestAccount, sd_bulkCategorize: sd_bulkCategorize,
     sd_apiCategorizedLines: sd_apiCategorizedLines, sd_apiAddExternalLine: sd_apiAddExternalLine,
     sd_apiGetLines: sd_apiGetLines, sd_apiMarkPlSynced: sd_apiMarkPlSynced,
-    sd_apiSuggestMapping: sd_apiSuggestMapping, sd_apiConfirmMapping: sd_apiConfirmMapping
+    sd_apiSuggestMapping: sd_apiSuggestMapping, sd_apiConfirmMapping: sd_apiConfirmMapping,
+    sd_apiDebugPlSyncSheet: sd_apiDebugPlSyncSheet
   };
 }
 
@@ -1902,6 +1904,19 @@ function sd_plSyncLogSet_(store, monthKey, result) {
     lock.releaseLock();
   }
 }
+/* 2026-09-05一時追加（実機E2Eデバッグ用・読み取り専用・原因特定でき次第削除）:
+ * PL反映ログシートの生データをそのまま返す。 */
+function sd_apiDebugPlSyncSheet(token) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  if (!tk || String(token || '').trim() !== String(tk).trim()) return { ok: false, error: 'unauthorized' };
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SD_PLSYNC_LOG_SHEET);
+  if (!sh) return { ok: true, exists: false };
+  var lastR = sh.getLastRow(), lastC = sh.getLastColumn();
+  var vals = (lastR > 0 && lastC > 0) ? sh.getRange(1, 1, lastR, lastC).getValues() : [];
+  return { ok: true, exists: true, sheetName: sh.getName(), lastRow: lastR, lastCol: lastC, values: vals };
+}
+
 /* tori-dashboard側のsyncSeisanCategoriesToPlから、店舗×月の同期試行結果を都度書き戻してもらうAPI。
  * 呼び出し例: POST {fn:'sd_apiMarkPlSynced', args:[token, store, monthKey, {ok, error, syncedAt}]} */
 function sd_apiMarkPlSynced(token, store, monthKey, result) {
