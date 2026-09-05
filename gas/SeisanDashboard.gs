@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.19-debug-plsync';
+var SD_VERSION = 'v5.20-plsync-monthkey-fix';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -51,8 +51,7 @@ var SD_API_WHITELIST = [
   'sd_saveAccount', 'sd_saveCorp', 'sd_testChatwork', 'sd_apiTransferEx',
   'sd_saveStoreRate', 'sd_saveRecurStatus', 'sd_saveOpsSettings', 'sd_getOpsSettings',
   'sd_suggestAccount', 'sd_bulkCategorize', 'sd_apiCategorizedLines', 'sd_apiAddExternalLine',
-  'sd_apiGetLines', 'sd_apiMarkPlSynced', 'sd_apiSuggestMapping', 'sd_apiConfirmMapping',
-  'sd_apiDebugPlSyncSheet'
+  'sd_apiGetLines', 'sd_apiMarkPlSynced', 'sd_apiSuggestMapping', 'sd_apiConfirmMapping'
 ];
 
 function sd_apiFnMap_() {
@@ -71,8 +70,7 @@ function sd_apiFnMap_() {
     sd_suggestAccount: sd_suggestAccount, sd_bulkCategorize: sd_bulkCategorize,
     sd_apiCategorizedLines: sd_apiCategorizedLines, sd_apiAddExternalLine: sd_apiAddExternalLine,
     sd_apiGetLines: sd_apiGetLines, sd_apiMarkPlSynced: sd_apiMarkPlSynced,
-    sd_apiSuggestMapping: sd_apiSuggestMapping, sd_apiConfirmMapping: sd_apiConfirmMapping,
-    sd_apiDebugPlSyncSheet: sd_apiDebugPlSyncSheet
+    sd_apiSuggestMapping: sd_apiSuggestMapping, sd_apiConfirmMapping: sd_apiConfirmMapping
   };
 }
 
@@ -1850,12 +1848,19 @@ function sd_plSyncLogSheet_() {
   if (!sh) {
     sh = ss.insertSheet(SD_PLSYNC_LOG_SHEET);
     sh.getRange(1, 1, 1, SD_PLSYNC_HEAD_.length).setValues([SD_PLSYNC_HEAD_]);
-    // 2026-09-05修正（実機E2Eで発覚した重大バグ）: sd_mappingSheet_と同じ理由でflush()が必要。
+    // 2026-09-05修正（実機E2Eで発覚した別の重大バグ）: sd_mappingSheet_と同じ理由でflush()が必要。
     // これが無いと、直後のsd_plSyncLogSet_内のgetLastRow()が0を誤って返し、初回書き込みが
     // ヘッダー行(1行目)を追記のつもりで上書きしてしまい、以降ずっと「同期ログが見つからない」
     // （plStatusが常にPL同期待ちのまま進まない）という不具合になっていた。
     SpreadsheetApp.flush();
   }
+  // 2026-09-05修正: 「対象月」列（B列）に"2026-08"を書き込むと、Google Sheetsが自動的に
+  // 日付として解釈・変換してしまい（表示上は分からないがgetValues()で読むとDateオブジェクトになる）、
+  // 文字列比較のsd_plSyncLogGet_が常に一致せずログが見つからない不具合の原因になっていた。
+  // 列をプレーンテキスト書式にしておくことで、今後の書き込みでは変換されなくなる（新規作成時だけでなく
+  // 既存シートに対しても毎回かけ直す＝既に自動変換されてしまっている環境を後から救済するため。
+  // 既存の壊れた行自体はsd_plSyncLogAll_側でDate/文字列どちらでも読めるようにして救済する）。
+  sh.getRange(2, 2, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat('@');
   return sh;
 }
 function sd_plSyncLogAll_() {
@@ -1867,8 +1872,11 @@ function sd_plSyncLogAll_() {
   for (var i = 0; i < vals.length; i++) {
     var v = vals[i];
     if (!String(v[0] || '').trim()) continue;
+    // 対象月がGoogle Sheetsによって日付型に自動変換されてしまった既存行も読めるようにする
+    // （sd_plSyncLogSheet_のプレーンテキスト書式修正より前に書かれた行の救済）。
+    var mk = (v[1] instanceof Date) ? sd_fmtMonth_(v[1]) : String(v[1] || '').trim();
     out.push({
-      row: i + 2, store: String(v[0] || '').trim(), monthKey: String(v[1] || '').trim(),
+      row: i + 2, store: String(v[0] || '').trim(), monthKey: mk,
       lastAttemptOk: String(v[2] || '') === 'OK', lastOkAt: v[3] ? String(v[3]) : '',
       lastError: String(v[4] || '')
     });
@@ -1904,19 +1912,6 @@ function sd_plSyncLogSet_(store, monthKey, result) {
     lock.releaseLock();
   }
 }
-/* 2026-09-05一時追加（実機E2Eデバッグ用・読み取り専用・原因特定でき次第削除）:
- * PL反映ログシートの生データをそのまま返す。 */
-function sd_apiDebugPlSyncSheet(token) {
-  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
-  if (!tk || String(token || '').trim() !== String(tk).trim()) return { ok: false, error: 'unauthorized' };
-  var ss = SpreadsheetApp.getActive();
-  var sh = ss.getSheetByName(SD_PLSYNC_LOG_SHEET);
-  if (!sh) return { ok: true, exists: false };
-  var lastR = sh.getLastRow(), lastC = sh.getLastColumn();
-  var vals = (lastR > 0 && lastC > 0) ? sh.getRange(1, 1, lastR, lastC).getValues() : [];
-  return { ok: true, exists: true, sheetName: sh.getName(), lastRow: lastR, lastCol: lastC, values: vals };
-}
-
 /* tori-dashboard側のsyncSeisanCategoriesToPlから、店舗×月の同期試行結果を都度書き戻してもらうAPI。
  * 呼び出し例: POST {fn:'sd_apiMarkPlSynced', args:[token, store, monthKey, {ok, error, syncedAt}]} */
 function sd_apiMarkPlSynced(token, store, monthKey, result) {
