@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.16-pl-category';
+var SD_VERSION = 'v5.17-invoice-link';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -34,6 +34,8 @@ var SD_AUTH_SHEET = '権限_精算ダッシュボード';
 var SD_RECUR_SHEET = '定期費目_精算ダッシュボード';
 var SD_LOG_SHEET = '発行ログ_精算ダッシュボード';
 var SD_CHECK_SHEET = '✅入力チェック表';
+var SD_PLSYNC_LOG_SHEET = 'PL反映ログ_精算ダッシュボード'; // 2026-09-05追加（invoice連携・9-2の6状態モデル用）
+var SD_MAPPING_SHEET = 'PLマッピング_精算ダッシュボード';   // 2026-09-05追加（MF勘定科目→PL表示科目の学習型マッピング）
 var SD_TZ = 'Asia/Tokyo';
 var SD_TAX_OPTIONS = ['10%', '8%', '対象外'];
 var SD_KUBUN_OPTIONS = ['売上', '変動費', '固定ロイヤリティ', '変動ロイヤリティ', '固定調整'];
@@ -48,7 +50,8 @@ var SD_API_WHITELIST = [
   'sd_getPdfB64', 'sd_updateCheckSheet', 'sd_bulkAdd', 'sd_getSettings',
   'sd_saveAccount', 'sd_saveCorp', 'sd_testChatwork', 'sd_apiTransferEx',
   'sd_saveStoreRate', 'sd_saveRecurStatus', 'sd_saveOpsSettings', 'sd_getOpsSettings',
-  'sd_suggestAccount', 'sd_bulkCategorize', 'sd_apiCategorizedLines', 'sd_apiAddExternalLine'
+  'sd_suggestAccount', 'sd_bulkCategorize', 'sd_apiCategorizedLines', 'sd_apiAddExternalLine',
+  'sd_apiGetLines', 'sd_apiMarkPlSynced', 'sd_apiSuggestMapping', 'sd_apiConfirmMapping'
 ];
 
 function sd_apiFnMap_() {
@@ -65,7 +68,9 @@ function sd_apiFnMap_() {
     sd_saveStoreRate: sd_saveStoreRate, sd_saveRecurStatus: sd_saveRecurStatus,
     sd_saveOpsSettings: sd_saveOpsSettings, sd_getOpsSettings: sd_getOpsSettings,
     sd_suggestAccount: sd_suggestAccount, sd_bulkCategorize: sd_bulkCategorize,
-    sd_apiCategorizedLines: sd_apiCategorizedLines, sd_apiAddExternalLine: sd_apiAddExternalLine
+    sd_apiCategorizedLines: sd_apiCategorizedLines, sd_apiAddExternalLine: sd_apiAddExternalLine,
+    sd_apiGetLines: sd_apiGetLines, sd_apiMarkPlSynced: sd_apiMarkPlSynced,
+    sd_apiSuggestMapping: sd_apiSuggestMapping, sd_apiConfirmMapping: sd_apiConfirmMapping
   };
 }
 
@@ -261,6 +266,7 @@ function sd_detectRaw_() {
           else if (n === '修正日') colMap.edited = i + 1;
           else if (n === '勘定科目') colMap.account = i + 1;
           else if (n === '補助科目') colMap.subAccount = i + 1;
+          else if (n === '外部参照ID') colMap.extRef = i + 1; // 2026-09-05追加（invoice連携の冪等キー専用列）
         });
         if (colMap.ym && colMap.kubun && colMap.item && colMap.amount) {
           var title = name;
@@ -965,7 +971,8 @@ function sd_readRows_(db) {
       paid: cm.paid ? String(d[cm.paid - 1] || '') : '',
       edited: cm.edited ? String(d[cm.edited - 1] || '') : '',
       account: cm.account ? String(d[cm.account - 1] || '').trim() : '',
-      subAccount: cm.subAccount ? String(d[cm.subAccount - 1] || '').trim() : ''
+      subAccount: cm.subAccount ? String(d[cm.subAccount - 1] || '').trim() : '',
+      extRef: cm.extRef ? String(d[cm.extRef - 1] || '').trim() : '' // 2026-09-05追加（invoice連携）
     });
   }
   return rows;
@@ -1392,7 +1399,8 @@ var SD_ACCOUNT_LIST = [
   '水道光熱費', '通信費', '消耗品・備品費', '修繕費', '衛生管理費', 'カード手数料', '支払手数料',
   '支払報酬料', '採用教育費', '接待交際費', '会議費', '慶弔見舞費', '保険料', '租税公課',
   '減価償却費', '福利厚生費', '諸会費', '雑費', '本部経費（按分）',
-  'その他売上', '銀行返済', '仕入（食材・飲料）', '運営委託費'
+  'その他売上', '銀行返済', '仕入（食材・飲料）', '運営委託費',
+  '業務委託料' // 2026-09-05追加（invoice連携。既存の自動連携科目「運営委託費」とは別物として扱う）
 ];
 /* 費目名からの科目推定（「既定値の自動提案」①項目名からの推定）。よくある表記のキーワード一致のみ。
  * ここに無ければ提案なし（空欄のまま・人が選ぶ）＝過剰な誤爆推定はしない。 */
@@ -1424,7 +1432,7 @@ function sd_guessAccount_(item) {
 // 方式に変更。これなら既存データに一切触れずに安全に新列を確保できる。
 function sd_ensureCategoryCols_(db) {
   var cm = db.colMap;
-  if (cm.account && cm.subAccount) return;
+  if (cm.account && cm.subAccount && cm.extRef) return;
   var sh = SpreadsheetApp.getActive().getSheetByName(db.sheet);
   var width = 0;
   Object.keys(cm).forEach(function (k) { if (cm[k] > width) width = cm[k]; });
@@ -1438,6 +1446,16 @@ function sd_ensureCategoryCols_(db) {
     sh.insertColumnAfter(width);
     sh.getRange(db.headerRow, width + 1).setValue('補助科目');
     cm.subAccount = width + 1;
+    width += 1; // 外部参照IDはこの直後に挿入するので、その位置計算に反映させる
+  }
+  // 2026-09-05追加（invoice連携）: 冪等キー（sourceKey）専用の列。従来は「備考」列に
+  // `外部連携:<sourceKey>`と書き込んで代用していたが、本来の備考が書けなくなる問題があったため分離した
+  // （設計書_業務委託精算書自動連携_2026-09-04.md 5-1章）。旧形式の行はsd_apiAddExternalLine側の
+  // フォールバック検索で引き続き見つけられるので、このシート自体の移行作業は不要。
+  if (!cm.extRef) {
+    sh.insertColumnAfter(width);
+    sh.getRange(db.headerRow, width + 1).setValue('外部参照ID');
+    cm.extRef = width + 1;
   }
   sd_clearDetectCache_(); // 列構成が変わったので、10分キャッシュを次回呼び出し用に破棄する
 }
@@ -1546,15 +1564,32 @@ function sd_apiCategorizedLines(token, store, monthKey) {
   return { found: true, hasSales: true, paid: true, lines: lines };
 }
 
-/* API: 外部（tori-dashboard・A-8拡張の勘定科目汎用アクション）から精算書へ明細を自動追加/更新する
- * （設計書_広告費自動連携と精算書PL科目連携_2026-08-31.md §5）。sd_apiCategorizedLinesと同じ
- * PL_SYNC_TOKEN認証（ログイン不要・サーバー間呼び出し用）。カード手数料・PayPay手数料など、MF会計
- * 仕訳側で確定した経費を、精算対象店舗の精算書明細へ自動反映するために使う。
- * line.sourceKey（例: 'mf-journal:12345'）で冪等：同じsourceKeyの行（noteに保存）は金額等を上書き、
- * 無ければ新規追加。同じ仕訳から二重に呼ばれても行が増えない。
+/* API: 外部（tori-dashboard・A-8拡張の勘定科目汎用アクション、および2026-09-05からns-portal請求書の
+ * 業務委託精算対象invoice）から精算書へ明細を自動追加/更新する
+ * （設計書_広告費自動連携と精算書PL科目連携_2026-08-31.md §5・設計書_業務委託精算書自動連携_2026-09-04.md 5-1章）。
+ * sd_apiCategorizedLinesと同じPL_SYNC_TOKEN認証（ログイン不要・サーバー間呼び出し用）。
+ * line.sourceKey（例: 'mf-journal:12345'、invoiceなら'invoice:<invoice_id>:<line_no>'）で冪等：
+ * 同じsourceKeyの行は金額等を上書き、無ければ新規追加。同じ仕訳・同じinvoiceから二重に呼ばれても行が増えない。
  * 振込済み（ロック中）の月は追加・更新できない（確定済みの精算書を後から書き換えないため）。
- * 呼び出し例: POST {fn:'sd_apiAddExternalLine', args:[token, store, monthKey,
- *   {item, amount, tax, account, subAccount, sourceKey}]} */
+ *
+ * 【2026-09-05拡張・後方互換に関する重要事項】
+ * ①冪等キーの保存場所: 従来は「備考」列に`外部連携:<sourceKey>`と書き込んで代用していたが、本来の
+ *   備考が書けなくなる問題があったため「外部参照ID」列（sd_ensureCategoryCols_が自動作成）に分離した。
+ *   検索は「外部参照ID列」→見つからなければ「備考列の旧形式」の順にフォールバックするので、過去に
+ *   カード手数料連携等で作られた既存行も引き続き同じsourceKeyで正しく上書きできる（データ移行不要）。
+ * ②備考: 今回から`line.note`をそのまま備考列に書く（sourceKeyとは独立。既存呼び出し元はnoteを渡さない
+ *   ため、既存行の備考は今後は空になる＝意図した変更。本来の備考として自由に使えるようにするため）。
+ * ③勘定科目の自動解決: `line.account`を明示的に渡す従来の呼び出し方は完全に維持（最優先でそのまま使う）。
+ *   今回追加: `line.account`を省略し代わりに`line.mfAccount`（Money Forward正式勘定科目）を渡した場合、
+ *   sd_resolveMapping_で自動解決を試みる（設計書10-5章の優先順位）。解決できなければ勘定科目は空欄のまま
+ *   行を作成/更新し、レスポンスに`needsMapping:true`を返す（精算書の「明細を入力」画面で人が選ぶまで
+ *   PL自動連携の対象からは自然に除外される＝sd_apiCategorizedLinesが空欄の勘定科目を無視する既存挙動）。
+ *   既存呼び出し元（tori-dashboardのwriteAccountCostToPl_）は常にaccountを明示的に渡すため、この新しい
+ *   分岐には入らず動作は一切変わらない。
+ * 呼び出し例（従来どおり）: POST {fn:'sd_apiAddExternalLine', args:[token, store, monthKey,
+ *   {item, amount, tax, account, subAccount, sourceKey, note}]}
+ * 呼び出し例（新規・invoice連携でmfAccountから自動解決させる場合）: args:[token, store, monthKey,
+ *   {item, amount, tax, mfAccount, mfSubAccount, vendor, subAccount, sourceKey, note}] */
 function sd_apiAddExternalLine(token, store, monthKey, line) {
   var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
   var got = String(token || '').trim(), want = String(tk || '').trim();
@@ -1565,12 +1600,23 @@ function sd_apiAddExternalLine(token, store, monthKey, line) {
   if (!item) return { ok: false, error: '費目名（item）が空です' };
   var amount = Number(line.amount);
   if (!isFinite(amount) || amount < 0) return { ok: false, error: '金額が不正です' };
-  var account = String(line.account || '').trim();
-  if (!account) return { ok: false, error: '勘定科目（account）が空です' };
   var sourceKey = String(line.sourceKey || '').trim().slice(0, 80);
   if (!sourceKey) return { ok: false, error: 'sourceKey（冪等キー）が空です' };
-  var noteTag = '外部連携:' + sourceKey;
+  var legacyNoteTag = '外部連携:' + sourceKey; // 旧形式（備考列）。フォールバック検索専用。
 
+  var account = String(line.account || '').trim();
+  var needsMapping = false;
+  var mappingSource = account ? 'explicit' : '';
+  if (!account) {
+    // mfAccountが無くても、費目名(item)だけで3.過去実績・5.キーワード推定は試す
+    // （設計書10-5の優先順位どおり。名称一致[4]はmfAccountが無ければ判定できないため自然にスキップされる）
+    var resolved = sd_resolveMapping_(store, String(line.mfAccount || '').trim(),
+      String(line.mfSubAccount || '').trim(), String(line.vendor || '').trim(), item);
+    if (resolved) { account = resolved.account; mappingSource = resolved.source; }
+    else needsMapping = true; // 何も解決できない＝人間確認が必要（空欄のまま作成する。AIで勝手に決めない）
+  }
+
+  var result;
   var lock = LockService.getDocumentLock();
   lock.waitLock(20000);
   try {
@@ -1585,8 +1631,11 @@ function sd_apiAddExternalLine(token, store, monthKey, line) {
     }
     sd_ensureCategoryCols_(st.db);
 
-    // 同じsourceKey（note列に保存）の行が既にあれば上書き（冪等）。無ければ新規追加。
-    var rows = sd_readRows_(st.db).filter(function (r) { return r.ym === monthKey && r.note === noteTag; });
+    // 同じsourceKeyの行が既にあれば上書き（冪等）。「外部参照ID」列→見つからなければ旧形式（備考列）の順。
+    var allRows = sd_readRows_(st.db).filter(function (r) { return r.ym === monthKey; });
+    var rows = allRows.filter(function (r) { return r.extRef === sourceKey; });
+    if (!rows.length) rows = allRows.filter(function (r) { return !r.extRef && r.note === legacyNoteTag; });
+    var note = String(line.note || '');
     if (rows.length) {
       var sh = SpreadsheetApp.getActive().getSheetByName(st.db.sheet);
       var cm = st.db.colMap;
@@ -1596,19 +1645,317 @@ function sd_apiAddExternalLine(token, store, monthKey, line) {
       if (cm.tax) sh.getRange(target, cm.tax).setValue(line.tax || '10%');
       if (cm.account) sh.getRange(target, cm.account).setValue(account);
       if (cm.subAccount) sh.getRange(target, cm.subAccount).setValue(String(line.subAccount || ''));
+      if (cm.note) sh.getRange(target, cm.note).setValue(note);
+      if (cm.extRef) sh.getRange(target, cm.extRef).setValue(sourceKey);
       sd_clearRowsCache_(st.db.sheet);
-      return { ok: true, row: target, updated: true };
+      result = { ok: true, row: target, updated: true, account: account, needsMapping: needsMapping, mappingSource: mappingSource };
+    } else {
+      var ymDate = sd_monthKeyToDate_(monthKey);
+      sd_appendRows_(st.db, ymDate, [{
+        kubun: '変動費', item: item, amount: amount, tax: line.tax || '10%',
+        note: note, account: account, subAccount: String(line.subAccount || ''), extRef: sourceKey
+      }], '自動連携（A-8/A-10）');
+      sd_clearRowsCache_(st.db.sheet);
+      result = { ok: true, updated: false, account: account, needsMapping: needsMapping, mappingSource: mappingSource };
     }
-    var ymDate = sd_monthKeyToDate_(monthKey);
-    sd_appendRows_(st.db, ymDate, [{
-      kubun: '変動費', item: item, amount: amount, tax: line.tax || '10%',
-      note: noteTag, account: account, subAccount: String(line.subAccount || '')
-    }], '自動連携（A-8）');
-    sd_clearRowsCache_(st.db.sheet);
-    return { ok: true, updated: false };
   } finally {
     lock.releaseLock();
   }
+
+  // 2026-09-05追加（対象店舗変更対応）: line.previousStoreが指定され今回のstoreと異なる場合、
+  // 旧店舗側に残っている同じsourceKeyの行を削除する（消し忘れによる孤立行・二重計上防止）。
+  // 新店舗への登録が成功した後に行う（先に消してしまうと新規登録が失敗した際にデータが消失するため）。
+  var previousStore = String(line.previousStore || '').trim();
+  if (result && result.ok && previousStore && previousStore !== store) {
+    result.previousStoreCleanup = sd_removeExternalLine_(previousStore, monthKey, sourceKey);
+  }
+  return result;
+}
+/* previousStore側に残った同じsourceKeyの行を削除する。振込済み（ロック中）の場合は確定済みの
+ * 精算書を書き換えないため削除せず、warningとして呼び出し元に伝える（新規登録自体は失敗させない）。 */
+function sd_removeExternalLine_(store, monthKey, sourceKey) {
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(20000);
+  try {
+    var det = sd_detect_();
+    var cfg = sd_config_(sd_masterStores_(det), det);
+    var st = null;
+    cfg.forEach(function (s) { if (s.name === store) st = s; });
+    if (!st || !st.db) return { removed: false, reason: '旧店舗「' + store + '」のDBシートが見つかりません' };
+    if (sd_isLocked_(store, monthKey)) {
+      return { removed: false, reason: monthKey + '分は振込済みのため旧店舗側の行は削除されませんでした。手動確認が必要です', locked: true };
+    }
+    var legacyNoteTag = '外部連携:' + sourceKey;
+    var rows = sd_readRows_(st.db).filter(function (r) { return r.ym === monthKey && (r.extRef === sourceKey || (!r.extRef && r.note === legacyNoteTag)); });
+    if (!rows.length) return { removed: false, reason: '旧店舗側に該当行が見つかりませんでした（既に削除済みの可能性）' };
+    var sh = SpreadsheetApp.getActive().getSheetByName(st.db.sheet);
+    // 複数行ヒットする異常系に備え、行番号の大きい順に消す（先に消すと後の行番号がずれるため）
+    rows.sort(function (a, b) { return b.row - a.row; }).forEach(function (r) { sh.deleteRow(r.row); });
+    sd_clearRowsCache_(st.db.sheet);
+    return { removed: true, rows: rows.length };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/* ================== 2026-09-05追加: MF勘定科目→PL表示科目マッピング（設計書_業務委託精算書自動連携_2026-09-04.md 10章） ==================
+ * Money Forward会計＝正式な勘定科目、精算書/PL＝経営管理上の表示科目、を別概念のまま管理する。
+ * 判定優先順位（設計書10-5・ユーザー確定): 1.明示的な既存マッピング（取引先指定） 2.取引先ごとの
+ * 確定ルール（1と同じ表・取引先の有無で区別） 3.過去実績（同じ店舗・同じ費目名の直近の科目） 4.名称が
+ * そのままPL科目名と一致（構造的デフォルト。約22科目が該当） 5.費目・摘要からのキーワード推定
+ * （既存sd_guessAccount_）。ここで解決できなければ6.人間確認（seisan-dashboard「明細を入力」画面 or
+ * ns-portal側のAI候補→人間確認UIへ委ねる。AIによる自動確定はこのファイルでは一切行わない）。 */
+var SD_MAPPING_HEAD_ = ['MF勘定科目', 'MF補助科目', '取引先', 'PL対象ON/OFF', 'PL表示科目', '更新日時', '更新者'];
+// 初期シード（設計書10-1・10-2章。ユーザー確定分のみ。判断が付かない科目=雑損失等はあえて入れない＝人間確認に回す）
+var SD_MAPPING_SEED_ = [
+  ['仕入高', '', '', 'ON', '仕入（食材・飲料）'],
+  ['地代家賃', '', '', 'ON', '家賃'],
+  ['備品・消耗品費', '', '', 'ON', '消耗品・備品費'],
+  ['退職金', '', '', 'ON', '退職金等'],
+  ['研修採用費', '', '', 'ON', '採用教育費'],
+  ['雑給', '', '', 'OFF', ''],        // 給与は別経路(スマレジ→MF給与→N-Style給与振込管理)。原則対象外
+  ['給料手当', '', '', 'OFF', ''],     // 同上
+  ['賞与', '', '', 'OFF', ''],        // 同上
+  ['支払利息', '', '', 'OFF', '']      // 既存の銀行借入利息PL連携(A-5)と二重計上になるため対象外
+];
+function sd_mappingSheet_() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SD_MAPPING_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(SD_MAPPING_SHEET);
+    sh.getRange(1, 1, 1, SD_MAPPING_HEAD_.length).setValues([SD_MAPPING_HEAD_]);
+    var seedRows = SD_MAPPING_SEED_.map(function (r) { return [r[0], r[1], r[2], r[3], r[4], Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd'), '(初期シード)']; });
+    sh.getRange(2, 1, seedRows.length, SD_MAPPING_HEAD_.length).setValues(seedRows);
+  }
+  return sh;
+}
+function sd_mappingRows_() {
+  var sh = sd_mappingSheet_();
+  var lastR = sh.getLastRow();
+  if (lastR < 2) return [];
+  var vals = sh.getRange(2, 1, lastR - 1, SD_MAPPING_HEAD_.length).getValues();
+  var out = [];
+  for (var i = 0; i < vals.length; i++) {
+    var v = vals[i];
+    if (!String(v[0] || '').trim()) continue;
+    out.push({
+      row: i + 2, mfAccount: String(v[0] || '').trim(), mfSubAccount: String(v[1] || '').trim(),
+      vendor: String(v[2] || '').trim(), onOff: String(v[3] || '').trim().toUpperCase() !== 'OFF',
+      plAccount: String(v[4] || '').trim()
+    });
+  }
+  return out;
+}
+/* mfAccount(+補助科目+取引先)から確定マッピングを引く。取引先指定行を優先、次に取引先無指定（一般）行。
+ * 補助科目は「行が空欄=どの補助科目でも一致」「行に値あり=完全一致のみ」。 */
+function sd_mappingLookup_(mfAccount, mfSubAccount, vendor) {
+  var rows = sd_mappingRows_().filter(function (r) { return r.mfAccount === mfAccount && (!r.mfSubAccount || r.mfSubAccount === mfSubAccount); });
+  if (!rows.length) return null;
+  var withVendor = vendor ? rows.filter(function (r) { return r.vendor === vendor; }) : [];
+  var hit = withVendor.length ? withVendor[0] : rows.filter(function (r) { return !r.vendor; })[0];
+  if (!hit) return null;
+  return { account: hit.onOff ? hit.plAccount : '対象外', source: hit.vendor ? 'mapping-vendor' : 'mapping-general' };
+}
+/* 優先順位1〜5をこの順で試す。店舗が分かれば3(過去実績)も試す。resolved:nullなら人間確認が必要。 */
+function sd_resolveMapping_(store, mfAccount, mfSubAccount, vendor, item) {
+  if (mfAccount) {
+    var hit = sd_mappingLookup_(mfAccount, mfSubAccount, vendor);
+    if (hit) return hit;
+  }
+  if (store && item) {
+    try {
+      var det = sd_detect_();
+      var cfg = sd_config_(sd_masterStores_(det), det);
+      var st = null;
+      cfg.forEach(function (s) { if (s.name === store) st = s; });
+      if (st && st.db) {
+        var hist = sd_readRows_(st.db).filter(function (r) { return sd_norm_(r.item) === sd_norm_(item) && r.account && r.account !== '対象外'; });
+        if (hist.length) return { account: hist[hist.length - 1].account, source: 'history' };
+      }
+    } catch (eH) { /* 履歴が引けなくても他の手段にフォールバックする */ }
+  }
+  if (mfAccount && SD_ACCOUNT_LIST.indexOf(mfAccount) >= 0) return { account: mfAccount, source: 'name-match' };
+  if (item) {
+    var guess = sd_guessAccount_(item);
+    if (guess) return { account: guess, source: 'keyword' };
+  }
+  return null;
+}
+/* ns-portal等から「このMF科目・この費目ならPL科目は何か」を事前に問い合わせるための読み取り専用API。
+ * 呼び出し側はこの結果が resolved:false のときだけ自前のAI候補提示→人間確認へ進む
+ * （設計書10-5: AIが分からないものを勝手に分類しない・ここでは常に確定済みルールの範囲でのみ答える）。
+ * 呼び出し例: POST {fn:'sd_apiSuggestMapping', args:[token,
+ *   {store, mfAccount, mfSubAccount, vendor, item}]} */
+function sd_apiSuggestMapping(token, params) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  if (!tk || String(token || '').trim() !== String(tk).trim()) return { ok: false, error: 'unauthorized' };
+  params = params || {};
+  var resolved = sd_resolveMapping_(String(params.store || ''), String(params.mfAccount || '').trim(),
+    String(params.mfSubAccount || '').trim(), String(params.vendor || '').trim(), String(params.item || '').trim());
+  if (!resolved) return { ok: true, resolved: false };
+  return { ok: true, resolved: true, account: resolved.account, source: resolved.source };
+}
+/* 人間が未設定項目のPL科目を確定した結果を、次回以降のデフォルトとして書き戻す
+ * （設計書10-5: 人間が確定した結果は次回以降の候補・ルールとして再利用できる設計にする）。
+ * vendorを指定すれば取引先限定ルール、空文字なら一般ルールとして保存する（既存の同一キーの行があれば上書き）。
+ * 呼び出し例: POST {fn:'sd_apiConfirmMapping', args:[token,
+ *   {mfAccount, mfSubAccount, vendor, account, onOff, user}]} */
+function sd_apiConfirmMapping(token, params) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  if (!tk || String(token || '').trim() !== String(tk).trim()) return { ok: false, error: 'unauthorized' };
+  params = params || {};
+  var mfAccount = String(params.mfAccount || '').trim();
+  if (!mfAccount) return { ok: false, error: 'mfAccountが空です' };
+  var onOff = params.onOff !== false && params.onOff !== 'OFF';
+  var account = String(params.account || '').trim();
+  if (onOff && !account) return { ok: false, error: 'PL対象ONの場合はaccount（PL表示科目）が必須です' };
+  var mfSubAccount = String(params.mfSubAccount || '').trim();
+  var vendor = String(params.vendor || '').trim();
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(15000);
+  try {
+    var sh = sd_mappingSheet_();
+    var rows = sd_mappingRows_();
+    var hit = rows.filter(function (r) { return r.mfAccount === mfAccount && r.mfSubAccount === mfSubAccount && r.vendor === vendor; })[0];
+    var now = Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd HH:mm');
+    var user = String(params.user || '');
+    if (hit) {
+      sh.getRange(hit.row, 4, 1, 4).setValues([[onOff ? 'ON' : 'OFF', onOff ? account : '', now, user]]);
+    } else {
+      var lastR = sh.getLastRow();
+      sh.getRange(lastR + 1, 1, 1, 7).setValues([[mfAccount, mfSubAccount, vendor, onOff ? 'ON' : 'OFF', onOff ? account : '', now, user]]);
+    }
+    return { ok: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/* ================== 2026-09-05追加: PL反映ログ（設計書_業務委託精算書自動連携_2026-09-04.md 9-2/5-3章) ==================
+ * tori-dashboard側のsyncSeisanCategoriesToPlが店舗×月の同期を試みるたびに結果を書き戻す。
+ * ここでは「店舗×月」単位でしか成否が分からない（現在のPL連携が集計後の値をまとめて書く方式のため）ので、
+ * 個別明細1件ごとの反映有無は断定しない（sd_apiGetLinesのplStatus参照）。 */
+var SD_PLSYNC_HEAD_ = ['店舗名', '対象月', '最終試行結果', '最終成功日時', '最終エラー内容', '更新日時'];
+function sd_plSyncLogSheet_() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SD_PLSYNC_LOG_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(SD_PLSYNC_LOG_SHEET);
+    sh.getRange(1, 1, 1, SD_PLSYNC_HEAD_.length).setValues([SD_PLSYNC_HEAD_]);
+  }
+  return sh;
+}
+function sd_plSyncLogAll_() {
+  var sh = sd_plSyncLogSheet_();
+  var lastR = sh.getLastRow();
+  if (lastR < 2) return [];
+  var vals = sh.getRange(2, 1, lastR - 1, SD_PLSYNC_HEAD_.length).getValues();
+  var out = [];
+  for (var i = 0; i < vals.length; i++) {
+    var v = vals[i];
+    if (!String(v[0] || '').trim()) continue;
+    out.push({
+      row: i + 2, store: String(v[0] || '').trim(), monthKey: String(v[1] || '').trim(),
+      lastAttemptOk: String(v[2] || '') === 'OK', lastOkAt: v[3] ? String(v[3]) : '',
+      lastError: String(v[4] || '')
+    });
+  }
+  return out;
+}
+function sd_plSyncLogGet_(store, monthKey) {
+  var rows = sd_plSyncLogAll_().filter(function (r) { return r.store === store && r.monthKey === monthKey; });
+  return rows.length ? rows[0] : null;
+}
+function sd_plSyncLogSet_(store, monthKey, result) {
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(15000);
+  try {
+    var sh = sd_plSyncLogSheet_();
+    var existing = sd_plSyncLogGet_(store, monthKey);
+    var now = new Date().toISOString();
+    var ok = !!(result && result.ok);
+    var syncedAt = (result && result.syncedAt) || now;
+    if (existing) {
+      sh.getRange(existing.row, 3, 1, 4).setValues([[
+        ok ? 'OK' : 'ERROR',
+        ok ? syncedAt : existing.lastOkAt, // 失敗時は直近の成功日時をそのまま残す（過去の成功実績を消さない）
+        ok ? '' : String((result && result.error) || ''),
+        now
+      ]]);
+    } else {
+      var lastR = sh.getLastRow();
+      sh.getRange(lastR + 1, 1, 1, 6).setValues([[store, monthKey, ok ? 'OK' : 'ERROR', ok ? syncedAt : '', ok ? '' : String((result && result.error) || ''), now]]);
+    }
+    return true;
+  } finally {
+    lock.releaseLock();
+  }
+}
+/* tori-dashboard側のsyncSeisanCategoriesToPlから、店舗×月の同期試行結果を都度書き戻してもらうAPI。
+ * 呼び出し例: POST {fn:'sd_apiMarkPlSynced', args:[token, store, monthKey, {ok, error, syncedAt}]} */
+function sd_apiMarkPlSynced(token, store, monthKey, result) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  if (!tk || String(token || '').trim() !== String(tk).trim()) return { ok: false, error: 'unauthorized' };
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey || ''))) return { ok: false, error: '年月が不正です（例: 2026-08）' };
+  if (!store) return { ok: false, error: '店舗名が空です' };
+  sd_plSyncLogSet_(store, monthKey, result || {});
+  return { ok: true };
+}
+
+/* ================== 2026-09-05追加: invoice連携の状態取得（設計書5-2・9-2章) ==================
+ * ns-portalが登録済み明細を(store,monthKey,sourceKey)の組で問い合わせ、現在値とPL反映状態(6状態モデル。
+ * 「PL反映済み（個別確認済み）」は現段階の実装では絶対に返さない＝店舗×月の集計同期以上の粒度を
+ * 保証できないため)をまとめて取得するための読み取り専用API。store単位でグルーピングしシート読み込みを
+ * 最小化する。呼び出し例: POST {fn:'sd_apiGetLines', args:[token, [{store,monthKey,sourceKey},...]]} */
+function sd_deriveLineStatus_(store, monthKey, row) {
+  if (!row) return null;
+  var account = row.account || '';
+  if (!account) return 'PL科目未設定';
+  if (account === '対象外') return 'PL対象外';
+  if (!sd_isLocked_(store, monthKey)) return '振込確定待ち';
+  var log = sd_plSyncLogGet_(store, monthKey);
+  if (!log) return 'PL同期待ち';
+  if (!log.lastAttemptOk) return 'PLエラー';
+  // 注: ここでは「店舗×月の同期が最後に成功した」ことしか分からず、この明細個別が実際にDB_PLへ
+  // 入ったことまでは検証できない（現在のPL連携が勘定科目×補助科目の集計値をまとめて書く方式のため。
+  // 設計書2章末尾）。ユーザー指示のとおり「PL反映済み（個別確認済み）」は絶対に返さない。
+  return '店舗月次PL同期実行済み（個別反映未検証）';
+}
+function sd_apiGetLines(token, items) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  if (!tk || String(token || '').trim() !== String(tk).trim()) return { ok: false, error: 'unauthorized' };
+  items = Array.isArray(items) ? items : [];
+  if (!items.length) return { ok: true, lines: [] };
+  var det = sd_detect_();
+  var cfg = sd_config_(sd_masterStores_(det), det);
+  var byStore = {};
+  items.forEach(function (it) { (byStore[it.store] = byStore[it.store] || []).push(it); });
+  var rowsByStore = {}; // store -> sd_readRows_結果（1回だけ読む）
+  var out = [];
+  Object.keys(byStore).forEach(function (storeName) {
+    var st = null;
+    cfg.forEach(function (s) { if (s.name === storeName) st = s; });
+    var reqs = byStore[storeName];
+    if (!st || !st.db) {
+      reqs.forEach(function (it) { out.push({ store: storeName, monthKey: it.monthKey, sourceKey: it.sourceKey, found: false, error: '店舗またはDBシートが見つかりません' }); });
+      return;
+    }
+    if (!rowsByStore[storeName]) rowsByStore[storeName] = sd_readRowsCached_(st.db);
+    var allRows = rowsByStore[storeName];
+    reqs.forEach(function (it) {
+      var monthKey = it.monthKey, sourceKey = it.sourceKey;
+      var candidates = allRows.filter(function (r) { return r.ym === monthKey && r.extRef === sourceKey; });
+      if (!candidates.length) candidates = allRows.filter(function (r) { return r.ym === monthKey && !r.extRef && r.note === '外部連携:' + sourceKey; });
+      var row = candidates[0];
+      if (!row) { out.push({ store: storeName, monthKey: monthKey, sourceKey: sourceKey, found: false }); return; }
+      out.push({
+        store: storeName, monthKey: monthKey, sourceKey: sourceKey, found: true,
+        item: row.item, amount: row.amount, tax: row.tax, account: row.account, subAccount: row.subAccount, note: row.note,
+        locked: sd_isLocked_(storeName, monthKey), plStatus: sd_deriveLineStatus_(storeName, monthKey, row)
+      });
+    });
+  });
+  return { ok: true, lines: out };
 }
 
 /* DBシートへの行追加（共通） */
@@ -1643,6 +1990,7 @@ function sd_appendRows_(db, ymDate, rows, editor) {
     if (cm.at) arr[cm.at - 1] = atStr;
     if (cm.account) arr[cm.account - 1] = String(r.account || '');
     if (cm.subAccount) arr[cm.subAccount - 1] = String(r.subAccount || '');
+    if (cm.extRef) arr[cm.extRef - 1] = String(r.extRef || ''); // 2026-09-05追加（invoice連携）
     return arr;
   });
   sh.getRange(lastData + 1, 1, out.length, width).setValues(out);
