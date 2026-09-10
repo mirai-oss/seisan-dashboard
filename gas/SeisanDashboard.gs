@@ -2811,6 +2811,55 @@ function sd_uploadAttachment(token, payload) {
   return { ok: true, name: newName, url: file.getUrl(), folder: sd_monthLabel_(payload.month) + '／' + payload.store, _ms: timer.breakdown() };
 }
 
+/* API: 外部（ns-portal・業務委託精算書自動連携）から、sd_apiAddExternalLineで登録した明細行に
+ * 添付ファイル（請求書の証憑等）を自動アップロードする。sd_uploadAttachmentと同じ命名規則
+ * （費目名_年.月_店舗名）・同じDriveフォルダ置き場を使うので、人間が精算書画面で「📎 添付を見る」
+ * から見たときに自動連携の行かどうかを意識せず開ける。
+ * PL_SYNC_TOKEN認証（ログイン不要・サーバー間呼び出し用。sd_apiAddExternalLineと同じ）。
+ * 振込済み（ロック中）の月はアップロードしない（sd_apiAddExternalLine側で既に行の追加自体が
+ * 拒否されるはずだが、念のためここでも二重チェックする）。
+ * 冪等: 同名ファイルが既にあれば削除してから作り直す（自動連携の再送・請求書の編集し直しで
+ * 何度呼ばれても、同じ費目・店舗・月には常に最新の1ファイルだけが残る。人間がアップロードする
+ * sd_uploadAttachment（revised時に【再】接頭辞で履歴を残す方式）とは意図的に挙動を変えている）。
+ * 呼び出し例: POST {fn:'sd_apiUploadAttachment', args:[token, store, monthKey,
+ *   {kind, fileName, mimeType, b64}]}
+ * 2026-09-10新設（担当Cからの依頼・ns-portal請求書のPL反映添付ファイル自動連携）。 */
+function sd_apiUploadAttachment(token, store, monthKey, payload) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  var got = String(token || '').trim(), want = String(tk || '').trim();
+  if (!tk || got !== want) return { ok: false, error: 'unauthorized' };
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey || ''))) return { ok: false, error: '年月が不正です（例: 2026-08）' };
+  payload = payload || {};
+  var kind = String(payload.kind || '').trim();
+  if (!kind) return { ok: false, error: '費目名（kind）が空です' };
+  if (!payload.b64) return { ok: false, error: 'ファイルデータ（b64）が空です' };
+  if (sd_isLocked_(store, monthKey)) {
+    return { ok: false, error: monthKey + '分は振込済み（確定済み）のためアップロードできません', locked: true };
+  }
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(20000);
+  try {
+    var ext = sd_extConfig_();
+    var extMatch = String(payload.fileName || '').match(/\.[A-Za-z0-9]+$/);
+    var extension = extMatch ? extMatch[0] : '';
+    var folder = sd_folderFor_(ext, monthKey, store);
+    var baseName = kind + '_' + sd_monthDot_(monthKey) + '_' + store;
+    var newName = baseName + extension;
+    // 冪等: 同名の既存ファイルがあれば先にゴミ箱へ移動してから作り直す（重複蓄積を防ぐ）
+    var existing = folder.getFilesByName(newName);
+    while (existing.hasNext()) { existing.next().setTrashed(true); }
+    var bytes = Utilities.base64Decode(payload.b64);
+    var blob = Utilities.newBlob(bytes, payload.mimeType || 'application/octet-stream', newName);
+    var file = folder.createFile(blob);
+    sd_log_('添付アップロード（自動連携）', store, monthKey, newName, file.getId(), file.getUrl(), '自動連携', '');
+    return { ok: true, name: newName, url: file.getUrl() };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function sd_listAttachments(token, store, monthKey) {
   var user = sd_auth_(token, false);
   var det = sd_detect_();
