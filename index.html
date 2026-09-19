@@ -453,14 +453,23 @@ function apiOnce_(fn){
 }
 // A-p1d 自動リトライ（2026-09-02追加・tori-dashboard/app.jsのA-p1cと同じ方針）: POST→GETの
 // フォールバックまで含めて両方ネットワークレベルで失敗した場合だけ、指数バックオフ
-// （0.5秒→1.5秒）で最大2回まで自動再試行する。アプリ側エラー（res.ok===false・ログイン失敗や
-// 権限エラー等）は再試行しても結果が変わらないためリトライしない。
+// （2026-09-19・A-11b強化: 0.5秒→1.5秒の2回から、1→2→4→8秒の4回へ。GAS側の一時的な
+// 「ページが見つかりません」的な不調が15〜30秒ほど続くことがある実測=tori-dashboard/app.js
+// 参照＝に対応するため）で最大4回まで自動再試行する。アプリ側エラー（res.ok===false・
+// ログイン失敗や権限エラー等）は再試行しても結果が変わらないためリトライしない。
+// 再試行中はローディング表示中のメッセージへ進捗（n/4）を上書きし、無言で止まって
+// 見える状態（「同期中…」滞留の体感）を防ぐ。
+var API_RETRY_DELAYS_MS = [1000,2000,4000,8000];
 function api(fn){
   var args = Array.prototype.slice.call(arguments,0);
   function attempt(n){
     return apiOnce_.apply(null, args).catch(function(e){
-      if(!e._retriable || n>=2) throw e;
-      return new Promise(function(res){ setTimeout(res, n===0?500:1500); }).then(function(){ return attempt(n+1); });
+      if(!e._retriable || n>=API_RETRY_DELAYS_MS.length) throw e;
+      var loadingEl=document.getElementById('loading'), msgEl=document.getElementById('loading-msg');
+      if(loadingEl && msgEl && loadingEl.classList.contains('show')){
+        msgEl.textContent='通信が不安定です。再試行中…（'+(n+1)+'/'+API_RETRY_DELAYS_MS.length+'）';
+      }
+      return new Promise(function(res){ setTimeout(res, API_RETRY_DELAYS_MS[n]); }).then(function(){ return attempt(n+1); });
     });
   }
   return attempt(0);
