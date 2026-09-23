@@ -52,7 +52,7 @@ var SD_API_WHITELIST = [
   'sd_saveStoreRate', 'sd_saveRecurStatus', 'sd_saveOpsSettings', 'sd_getOpsSettings',
   'sd_suggestAccount', 'sd_bulkCategorize', 'sd_apiCategorizedLines', 'sd_apiAddExternalLine',
   'sd_apiGetLines', 'sd_apiMarkPlSynced', 'sd_apiSuggestMapping', 'sd_apiConfirmMapping',
-  'sd_apiUploadAttachment'
+  'sd_apiUploadAttachment', 'sd_apiDebugExtRef'
 ];
 
 function sd_apiFnMap_() {
@@ -72,7 +72,7 @@ function sd_apiFnMap_() {
     sd_apiCategorizedLines: sd_apiCategorizedLines, sd_apiAddExternalLine: sd_apiAddExternalLine,
     sd_apiGetLines: sd_apiGetLines, sd_apiMarkPlSynced: sd_apiMarkPlSynced,
     sd_apiSuggestMapping: sd_apiSuggestMapping, sd_apiConfirmMapping: sd_apiConfirmMapping,
-    sd_apiUploadAttachment: sd_apiUploadAttachment
+    sd_apiUploadAttachment: sd_apiUploadAttachment, sd_apiDebugExtRef: sd_apiDebugExtRef
   };
 }
 
@@ -2070,6 +2070,28 @@ function sd_apiGetLines(token, items) {
     });
   });
   return { ok: true, lines: out };
+}
+
+/* 2026-09-23追加（秋葉原肉寿司2026-08の4行が found:false になる件の切り分け用・一時診断）。
+ * sd_apiGetLinesと違って完全一致判定をせず、対象店舗×月の全行のext参照ID等を生の文字コード
+ * 込みで返す。見た目は同じでも全角/半角・見えない文字が混ざっていないかを確認するのが目的。
+ * 調査が終わったらSD_API_WHITELIST/sd_apiFnMap_ともどもこの関数ごと削除してよい。 */
+function sd_apiDebugExtRef(token, store, monthKey) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  if (!tk || String(token || '').trim() !== String(tk).trim()) return { ok: false, error: 'unauthorized' };
+  var det = sd_detect_();
+  var cfg = sd_config_(sd_masterStores_(det), det);
+  var st = null;
+  cfg.forEach(function (s) { if (s.name === store) st = s; });
+  if (!st || !st.db) return { ok: false, error: '店舗またはDBシートが見つかりません: ' + store };
+  var colMap = st.db.colMap;
+  var rows = sd_readRows_(st.db).filter(function (r) { return r.ym === monthKey; });
+  var out = rows.map(function (r) {
+    var codes = [];
+    for (var i = 0; i < r.extRef.length; i++) codes.push(r.extRef.charCodeAt(i));
+    return { row: r.row, item: r.item, account: r.account, extRef: r.extRef, extRefLen: r.extRef.length, extRefCharCodes: codes, note: r.note };
+  });
+  return { ok: true, colMap: colMap, rows: out };
 }
 
 /* DBシートへの行追加（共通） */
