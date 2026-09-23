@@ -1505,10 +1505,28 @@ function sd_guessAccount_(item) {
 // 存在しており、そこへ無条件に上書きしてしまっていた。sh.insertColumnAfter()でヘッダー列の
 // 直後に新しい列を物理的に挿入し、既存の列（内容不明でも）をすべて右にずらして退避させる
 // 方式に変更。これなら既存データに一切触れずに安全に新列を確保できる。
+// 2026-09-23修正（秋葉原肉寿司2026-08の4行で発覚したバグ: 「勘定科目」「補助科目」列が
+// 重複して複数作られ、シート側が「列名が重複しています」という検証エラーを出す状態になった）。
+// 原因: この関数に渡される db.colMap は、呼び出し元が（LockService.getDocumentLockを取得する
+// 前後を問わず）sd_detect_()の10分キャッシュ経由で取得したものであり、呼び出しのタイミング
+// によっては「他の同時実行がついさっき列を作った」という最新状態を反映していないことがあった。
+// 古いcolMapを信じて「列が無い」と誤判定すると、既にある列の隣にもう1セット列を挿入して
+// しまう。ここでは呼び出し元のcolMapを信用せず、この関数の実行時点（ロックを保持している間）
+// のヘッダー行を直接読み直し、本当に無いかどうかをその場で確認してから挿入する。
 function sd_ensureCategoryCols_(db) {
   var cm = db.colMap;
-  if (cm.account && cm.subAccount && cm.extRef) return;
   var sh = SpreadsheetApp.getActive().getSheetByName(db.sheet);
+  // sd_detectRaw_と同じ「同名の見出しが複数あれば一番右（後着）を採用」規則に合わせる
+  // （読み書きの列判定がここだけ食い違うと、新規追加はこちらの列・既存データの読み込みは
+  // あちらの列、という二重管理事故になるため）。
+  var liveHeader = sh.getRange(db.headerRow, 1, 1, Math.max(1, sh.getLastColumn())).getDisplayValues()[0];
+  liveHeader.forEach(function (v, i) {
+    var n = sd_norm_(v);
+    if (n === '勘定科目') cm.account = i + 1;
+    else if (n === '補助科目') cm.subAccount = i + 1;
+    else if (n === '外部参照ID') cm.extRef = i + 1;
+  });
+  if (cm.account && cm.subAccount && cm.extRef) return;
   var width = 0;
   Object.keys(cm).forEach(function (k) { if (cm[k] > width) width = cm[k]; });
   if (!cm.account) {
