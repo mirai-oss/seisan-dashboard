@@ -1693,7 +1693,12 @@ function sd_apiAddExternalLine(token, store, monthKey, line) {
   if (!item) return { ok: false, error: '費目名（item）が空です' };
   var amount = Number(line.amount);
   if (!isFinite(amount) || amount < 0) return { ok: false, error: '金額が不正です' };
-  var sourceKey = String(line.sourceKey || '').trim().slice(0, 80);
+  // 2026-09-23修正（重大バグ）: invoice連携のsourceKeyは'invoice:<uuid>:<uuid>'形式で常に81文字
+  // だが、ここが80文字に切り詰めていたため保存時に末尾1文字が必ず欠落し、読み取り側
+  // （sd_apiGetLinesの完全一致比較）とは絶対に一致しなくなっていた（秋葉原肉寿司の4件で発覚・
+  // 担当Cが文字コード単位の突合で特定）。invoice連携全体に影響する構造的な不具合だったため、
+  // 十分な余裕を持たせて200文字までに拡張する。
+  var sourceKey = String(line.sourceKey || '').trim().slice(0, 200);
   if (!sourceKey) return { ok: false, error: 'sourceKey（冪等キー）が空です' };
   var legacyNoteTag = '外部連携:' + sourceKey; // 旧形式（備考列）。フォールバック検索専用。
 
@@ -3297,6 +3302,46 @@ function sd_createMasterAccount() {
   var pw = Utilities.getUuid().split('-')[0];
   sh.appendRow(['master', pw, 'マスター', 'マスター', '全店', 'TRUE']);
   Logger.log('マスターアカウントを作成しました: master / ' + pw + '（必ずログイン後に変更してください）');
+}
+
+/* 2026-09-23一時復旧用（エディタから1回だけ手動実行。呼び出しAPIには登録しない）。
+ * sd_apiAddExternalLineの.slice(0,80)切り詰めバグ（修正済み）により、秋葉原肉寿司2026-08の
+ * GOSSO株式会社3明細の「外部参照ID」列が末尾1文字欠けた値のまま保存されてしまっていた行を、
+ * 正しい81文字のsourceKeyへ書き戻す。安全のため、セルの現在値が「欠けている前提の80文字値」に
+ * 完全一致する場合だけ上書きする（既に直っている・想定と違う値のセルには一切触れない）。
+ * 実行後、Logger（表示→ログ）で結果を確認し、この関数ごと削除してよい。 */
+function sd_fixTruncatedExtRef_akihabara_20260923() {
+  var FIXES = [
+    { truncated: 'invoice:6e3520e4-1698-4a7e-b735-2b7ea8ad244e:14cc9355-1b15-4b22-8efb-df65fb28d69',
+      correct:   'invoice:6e3520e4-1698-4a7e-b735-2b7ea8ad244e:14cc9355-1b15-4b22-8efb-df65fb28d690' },
+    { truncated: 'invoice:6e3520e4-1698-4a7e-b735-2b7ea8ad244e:89ef29ec-414c-4bda-9cc9-99f9f539158',
+      correct:   'invoice:6e3520e4-1698-4a7e-b735-2b7ea8ad244e:89ef29ec-414c-4bda-9cc9-99f9f5391582' },
+    { truncated: 'invoice:6e3520e4-1698-4a7e-b735-2b7ea8ad244e:e08d4b74-eea4-4c4f-b271-4136ab46e61',
+      correct:   'invoice:6e3520e4-1698-4a7e-b735-2b7ea8ad244e:e08d4b74-eea4-4c4f-b271-4136ab46e612' }
+  ];
+  var store = '秋葉原 肉寿司', monthKey = '2026-08';
+  var det = sd_detect_();
+  var cfg = sd_config_(sd_masterStores_(det), det);
+  var st = null;
+  cfg.forEach(function (s) { if (s.name === store) st = s; });
+  if (!st || !st.db) { Logger.log('店舗またはDBシートが見つかりません: ' + store); return; }
+  var sh = SpreadsheetApp.getActive().getSheetByName(st.db.sheet);
+  var cm = st.db.colMap;
+  if (!cm.extRef) { Logger.log('外部参照ID列が見つかりません'); return; }
+  var rows = sd_readRows_(st.db).filter(function (r) { return r.ym === monthKey; });
+  var fixed = 0, skipped = [];
+  FIXES.forEach(function (fx) {
+    var hit = rows.filter(function (r) { return r.extRef === fx.truncated; });
+    if (!hit.length) { skipped.push('見つからず（既に直っているか値が違う）: ...' + fx.truncated.slice(-16)); return; }
+    hit.forEach(function (r) {
+      sh.getRange(r.row, cm.extRef).setValue(fx.correct);
+      fixed++;
+      Logger.log('行' + r.row + '（' + r.item + '）を修正: ' + fx.truncated + ' → ' + fx.correct);
+    });
+  });
+  sd_clearRowsCache_(st.db.sheet);
+  Logger.log('=== 完了: ' + fixed + '件修正 ===');
+  skipped.forEach(function (s) { Logger.log(s); });
 }
 
 function sd_diagnose() {
