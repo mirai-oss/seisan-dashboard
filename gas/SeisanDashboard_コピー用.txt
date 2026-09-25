@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.21-ds-sessions';
+var SD_VERSION = 'v5.22-cash-sync';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -52,7 +52,7 @@ var SD_API_WHITELIST = [
   'sd_saveStoreRate', 'sd_saveRecurStatus', 'sd_saveOpsSettings', 'sd_getOpsSettings',
   'sd_suggestAccount', 'sd_bulkCategorize', 'sd_apiCategorizedLines', 'sd_apiAddExternalLine',
   'sd_apiGetLines', 'sd_apiMarkPlSynced', 'sd_apiSuggestMapping', 'sd_apiConfirmMapping',
-  'sd_apiUploadAttachment', 'sd_apiDebugExtRef'
+  'sd_apiUploadAttachment', 'sd_apiDebugExtRef', 'sd_apiCashSync'
 ];
 
 function sd_apiFnMap_() {
@@ -72,7 +72,8 @@ function sd_apiFnMap_() {
     sd_apiCategorizedLines: sd_apiCategorizedLines, sd_apiAddExternalLine: sd_apiAddExternalLine,
     sd_apiGetLines: sd_apiGetLines, sd_apiMarkPlSynced: sd_apiMarkPlSynced,
     sd_apiSuggestMapping: sd_apiSuggestMapping, sd_apiConfirmMapping: sd_apiConfirmMapping,
-    sd_apiUploadAttachment: sd_apiUploadAttachment, sd_apiDebugExtRef: sd_apiDebugExtRef
+    sd_apiUploadAttachment: sd_apiUploadAttachment, sd_apiDebugExtRef: sd_apiDebugExtRef,
+    sd_apiCashSync: sd_apiCashSync
   };
 }
 
@@ -141,6 +142,30 @@ function sd_apiTransferEx(token, store, monthKey) {
   var paid = sd_isLocked_(store, monthKey);
   if (!paid) return { found: true, hasSales: true, paid: false, reason: monthKey + '分はまだ振込済みではありません（未確定のためPL反映対象外）', transferEx: s.transferEx, transfer: s.transfer };
   return { found: true, hasSales: true, paid: true, transferEx: s.transferEx, transfer: s.transfer };
+}
+
+/* ---------- 現金売上の外部連携（レジ照合後の反映・2026-09-26追加） ----------
+ * 現金売上の月次照合（ns-daily-import cash-sales-monthly-check）で、管理システム（売上DB→分析_日別店舗）の
+ * 現金売上がレジの正しい値に修正された後、精算書の「N月現金売上」行を最新の値へ更新する（既に行があれば
+ * 上書き更新・無ければ登録＝sd_cashApplyCoreの手動実行(skipIfExists=false)と同じ）。専用トークン(PL_SYNC_TOKEN)認証。
+ * 精算対象外の店舗（sd_config_に無い店舗）は何もしない。振込済み(sd_isLocked_)の月・店舗は更新せず
+ * results に「手動で確認」と返す（確定済みの精算書を自動で書き換えないため）。
+ * 呼び出し例: POST {fn:'sd_apiCashSync', args:[token, '2026-08', ['秋葉原 肉寿司']]}
+ *   （tori-dashboardの seisanCashSync 経由。呼び出し元がSEISAN_WEBAPP_URLとPL_SYNC_TOKENを持つ） */
+function sd_apiCashSync(token, monthKey, storeNames) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  if (!tk || String(token || '').trim() !== String(tk).trim()) throw new Error('unauthorized');
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey || ''))) throw new Error('monthKey は YYYY-MM 形式');
+  var names = (storeNames || []).map(function (n) { return String(n || '').trim(); }).filter(Boolean);
+  if (!names.length) return { ok: true, results: ['対象店舗がありません'] };
+  var results = [], allowed = [];
+  names.forEach(function (n) {
+    if (sd_isLocked_(n, monthKey)) results.push(n + ': 振込済みのため更新しません（精算書の現金売上は手動で確認してください）');
+    else allowed.push(n);
+  });
+  if (!allowed.length) return { ok: true, results: results };
+  var res = sd_cashApplyCore_(monthKey, allowed, 'レジ照合(自動)', false);
+  return { ok: true, results: results.concat(res.results) };
 }
 
 /* ---------- 初回承認用（エディタから一度実行） ---------- */
