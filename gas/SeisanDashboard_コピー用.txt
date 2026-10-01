@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.22-cash-sync';
+var SD_VERSION = 'v5.23-extline-kubun';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -1726,6 +1726,11 @@ function sd_apiAddExternalLine(token, store, monthKey, line) {
   var sourceKey = String(line.sourceKey || '').trim().slice(0, 200);
   if (!sourceKey) return { ok: false, error: 'sourceKey（冪等キー）が空です' };
   var legacyNoteTag = '外部連携:' + sourceKey; // 旧形式（備考列）。フォールバック検索専用。
+  // 2026-09-30修正（ユーザー指摘「カード売上が変動費で入ってしまっている」）: 区分（kubun）が常に
+  // '変動費'に固定されていた（呼び出し元が売上の明細を送っても区別できなかった）。呼び出し元が
+  // line.kubunを指定していればそれを使う（SD_KUBUN_OPTIONS='売上'/'変動費'/...）。省略時は
+  // 従来どおり'変動費'（writeAccountCostToPl_等の既存呼び出し元は経費のみを送っているため無影響）。
+  var kubun = String(line.kubun || '変動費').trim() || '変動費';
 
   var account = String(line.account || '').trim();
   var needsMapping = false;
@@ -1763,6 +1768,7 @@ function sd_apiAddExternalLine(token, store, monthKey, line) {
       var sh = SpreadsheetApp.getActive().getSheetByName(st.db.sheet);
       var cm = st.db.colMap;
       var target = rows[0].row;
+      if (cm.kubun) sh.getRange(target, cm.kubun).setValue(kubun);
       sh.getRange(target, cm.item).setValue(item);
       sh.getRange(target, cm.amount).setValue(amount);
       if (cm.tax) sh.getRange(target, cm.tax).setValue(line.tax || '10%');
@@ -1775,7 +1781,7 @@ function sd_apiAddExternalLine(token, store, monthKey, line) {
     } else {
       var ymDate = sd_monthKeyToDate_(monthKey);
       sd_appendRows_(st.db, ymDate, [{
-        kubun: '変動費', item: item, amount: amount, tax: line.tax || '10%',
+        kubun: kubun, item: item, amount: amount, tax: line.tax || '10%',
         note: note, account: account, subAccount: String(line.subAccount || ''), extRef: sourceKey
       }], '自動連携（A-8/A-10）');
       sd_clearRowsCache_(st.db.sheet);
