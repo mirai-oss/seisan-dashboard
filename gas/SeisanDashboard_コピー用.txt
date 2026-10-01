@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.23-extline-kubun';
+var SD_VERSION = 'v5.24-removeextline';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -52,7 +52,7 @@ var SD_API_WHITELIST = [
   'sd_saveStoreRate', 'sd_saveRecurStatus', 'sd_saveOpsSettings', 'sd_getOpsSettings',
   'sd_suggestAccount', 'sd_bulkCategorize', 'sd_apiCategorizedLines', 'sd_apiAddExternalLine',
   'sd_apiGetLines', 'sd_apiMarkPlSynced', 'sd_apiSuggestMapping', 'sd_apiConfirmMapping',
-  'sd_apiUploadAttachment', 'sd_apiDebugExtRef', 'sd_apiCashSync'
+  'sd_apiUploadAttachment', 'sd_apiDebugExtRef', 'sd_apiCashSync', 'sd_apiRemoveExternalLine'
 ];
 
 function sd_apiFnMap_() {
@@ -73,7 +73,7 @@ function sd_apiFnMap_() {
     sd_apiGetLines: sd_apiGetLines, sd_apiMarkPlSynced: sd_apiMarkPlSynced,
     sd_apiSuggestMapping: sd_apiSuggestMapping, sd_apiConfirmMapping: sd_apiConfirmMapping,
     sd_apiUploadAttachment: sd_apiUploadAttachment, sd_apiDebugExtRef: sd_apiDebugExtRef,
-    sd_apiCashSync: sd_apiCashSync
+    sd_apiCashSync: sd_apiCashSync, sd_apiRemoveExternalLine: sd_apiRemoveExternalLine
   };
 }
 
@@ -1825,6 +1825,17 @@ function sd_removeExternalLine_(store, monthKey, sourceKey) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// sd_removeExternalLine_（内部ヘルパー）の公開版。2026-10-01追加：SMBC GMO PAYMENTのカード売上を
+// 自動取込時点で精算書へ反映していたが、「仕訳を作成」時に汎用の仕組み（seisan_confirm_receivable）
+// が別のsourceKeyで同じ内容を二重登録してしまうことが判明（ユーザー指摘）。取込時点の反映は廃止し
+// 「仕訳を作成」時の反映に一本化したため、取込時点で作ってしまった行（sourceKey先頭'smbc-card:'）
+// の掃除に使う。token認証（PL_SYNC_TOKEN）。
+function sd_apiRemoveExternalLine(token, store, monthKey, sourceKey) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  if (!tk || String(token || '').trim() !== String(tk).trim()) return { ok: false, error: 'unauthorized' };
+  return { ok: true, result: sd_removeExternalLine_(store, monthKey, sourceKey) };
 }
 
 /* ================== 2026-09-05追加: MF勘定科目→PL表示科目マッピング（設計書_業務委託精算書自動連携_2026-09-04.md 10章） ==================
