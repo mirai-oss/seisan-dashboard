@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.25-roy-actual';
+var SD_VERSION = 'v5.26-portal-issued';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -2656,11 +2656,42 @@ function sd_issueAndSend(token, store, monthKey, sendMail) {
       result.to = ms.to;
       result.attachCount = attachments.length;
       sd_markIssued_(det, store, monthKey);
+      result.portal = sd_notifyPortalIssued_(store, monthKey, blob, isResend); // 2026-10-15: N-Style側の仕訳の下書きをポータルへ（失敗しても発行は止めない）
     }
     sd_log_(sendMail ? 'メール送信' : 'PDF保存', store, monthKey, blob.getName(), file.getId(), file.getUrl(), user.name, sendMail ? (result.to || '') : '');
     return result;
   } finally {
     lock.releaseLock();
+  }
+}
+
+/* 2026-10-15: 精算書の「発行・送信」の直後に、ポータル（Supabase Edge Function invoice-auto-sales）へ通知する。
+ * ポータル側が、N-Style側の仕訳（運営委託費／未払金）の下書きを作って承認待ちに出す（精算書PDF付き）。
+ * 認証は PL_SYNC_TOKEN（スクリプトプロパティ・sd_apiTransferEx等と同じ共有トークン）。失敗しても精算書の発行は止めない。 */
+var SD_PORTAL_ISSUED_URL = 'https://uuvsxzhpxtghojoubjcc.supabase.co/functions/v1/invoice-auto-sales';
+function sd_notifyPortalIssued_(store, monthKey, blob, isResend) {
+  try {
+    var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+    if (!tk) return { ok: false, error: 'PL_SYNC_TOKEN未設定' };
+    var det = sd_detect_();
+    var cfg = sd_config_(sd_masterStores_(det), det);
+    var st = null;
+    cfg.forEach(function (s) { if (s.name === store) st = s; });
+    if (!st || !st.db) return { ok: false, error: '店舗またはDBシートが見つかりません' };
+    var s = sd_settle_(sd_readRowsCached_(st.db), monthKey, st.rate, st.fixed, st.salesName);
+    var payload = {
+      action: 'seisan_issued', token: tk, store: store, month: monthKey,
+      transfer: s.transfer, transfer_ex: s.transferEx, tax: s.tax, resend: !!isResend,
+      pdf: { file_name: blob.getName(), base64: Utilities.base64Encode(blob.getBytes()) }
+    };
+    var res = UrlFetchApp.fetch(SD_PORTAL_ISSUED_URL, { method: 'post', contentType: 'application/json', payload: JSON.stringify(payload), muteHttpExceptions: true });
+    var code = res.getResponseCode();
+    var text = String(res.getContentText() || '').slice(0, 300);
+    if (code !== 200) Logger.log('ポータル通知に失敗（' + code + '）: ' + text);
+    return { ok: code === 200, code: code, body: text };
+  } catch (e) {
+    Logger.log('ポータル通知で例外: ' + e);
+    return { ok: false, error: String(e) };
   }
 }
 
