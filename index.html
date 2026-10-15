@@ -794,7 +794,8 @@ function settleTable(st){
   if(s.adj)  rows+='<tr><td style="padding-left:16px">固定調整（DB入力）</td><td style="text-align:right">'+yen(s.adj)+'</td></tr>';
   rows+='<tr><td><b>変動費（DB入力合計）</b></td><td style="text-align:right">'+yen(s.varCost)+'</td></tr>';
   rows+='<tr><td><b>ロイヤリティ 固定</b></td><td style="text-align:right">'+yen(s.royF)+'</td></tr>';
-  rows+='<tr><td><b>ロイヤリティ 変動（売上 × '+esc(st.rate)+'）</b></td><td style="text-align:right">'+yen(s.royV)+'</td></tr>';
+  rows+='<tr><td><b>ロイヤリティ 変動（'+(s.royBaseActual?'売上シート（レジ実績）'+yen(s.royBase):'売上')+' × '+esc(st.rate)+'）</b></td><td style="text-align:right">'+yen(s.royV)+'</td></tr>';
+  if(s.royBaseActual && s.royBase!==s.sales) rows+='<tr><td style="padding-left:16px;color:#b45309">※ 精算書の売上合計（'+yen(s.sales)+'）とレジ実績（'+yen(s.royBase)+'）に差があります（変動ロイヤリティはレジ実績で計算）</td><td style="text-align:right">'+yen(s.sales-s.royBase)+'</td></tr>';
   if(s.royVarDb) rows+='<tr><td style="padding-left:16px">※ DBに変動ロイヤリティ入力あり（参考・計算には売上×率を使用）</td><td style="text-align:right">'+yen(s.royVarDb)+'</td></tr>';
   rows+='<tr><td><b>経費合計</b></td><td style="text-align:right">'+yen(s.costTotal)+'</td></tr>';
   rows+='<tr style="font-weight:800"><td>振込金額（税込）＝ 売上 − 経費合計</td><td style="text-align:right">'+yen(s.transfer)+'</td></tr>';

@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.24-removeextline';
+var SD_VERSION = 'v5.25-roy-actual';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -25,6 +25,11 @@ var SD_VERSION = 'v5.24-removeextline';
 var SD_SSO_SUPA_URL = 'https://uuvsxzhpxtghojoubjcc.supabase.co';
 var SD_SSO_SUPA_KEY = 'sb_publishable_MrwPJAx_Ws_fdRutprKCiQ_dg3wCiTr';
 var SD_START_MONTH = '2026-03'; // これより前の月はプルダウンに出さない
+// 2026-10-15: この月以降は、変動ロイヤリティを「精算書の売上合計」ではなく「売上シート（分析_日別店舗 S列 支払合計＝レジ実績）の月間売上」から計算する。
+// 売上シートは、毎月3日の月次照合（ns-daily-import cash-sales-monthly-check）でレジ(POS)と照合され、ずれていればレジの値に修正される。
+// 過去の月は従来どおり（精算書の売上合計×率）。売上シートの値が取れない店舗・月も従来の計算にフォールバックする。
+var SD_ROYALTY_ACTUAL_FROM = '2026-09';
+var SD_ACTUAL_MEMO_ = {}; // 実行中のメモ: 対象月 → {店舗名(正規化): 月間売上} または null
 var SD_PAID_SHEET = '振込管理_精算ダッシュボード';
 var SD_NO_CLIENT_LABEL = '（委託先未設定）'; // 委託先（法人）が未設定の店舗をグルーピングする際の仮キー
 var SD_CORP_SHEET = '法人設定_精算ダッシュボード';
@@ -137,7 +142,7 @@ function sd_apiTransferEx(token, store, monthKey) {
   if (!st) return { found: false, reason: '店舗マスタに「' + store + '」という名前が見つかりません（表記ゆれの可能性）', masterNames: cfg.map(function (s) { return s.name; }) };
   if (!st.db) return { found: false, reason: '店舗は見つかったが、データシートが自動特定できていません（設定シートでDBシート名の紐付けが必要）' };
   var rows = sd_readRowsCached_(st.db);
-  var s = sd_settle_(rows, monthKey, st.rate, st.fixed);
+  var s = sd_settle_(rows, monthKey, st.rate, st.fixed, st.salesName);
   if (!s.hasSales) return { found: true, hasSales: false, reason: monthKey + '分の売上行が0件でした（' + st.db.sheet + 'シート）', rowCountAllMonths: rows.length };
   var paid = sd_isLocked_(store, monthKey);
   if (!paid) return { found: true, hasSales: true, paid: false, reason: monthKey + '分はまだ振込済みではありません（未確定のためPL反映対象外）', transferEx: s.transferEx, transfer: s.transfer };
@@ -420,7 +425,24 @@ function sd_config_(master, det) {
 
 /* ---------- 精算計算（共通ロジック：ダッシュボード表示・PDF生成で共用） ---------- */
 
-function sd_settle_(rows, monthKey, rateStr, fixed) {
+/* 変動ロイヤリティの基準にする「売上シート（レジ実績）の月間売上」。取れない・対象月より前なら null（従来の計算へ） */
+function sd_actualSalesFor_(salesName, monthKey) {
+  try {
+    if (!salesName || String(monthKey) < SD_ROYALTY_ACTUAL_FROM) return null;
+    var map = SD_ACTUAL_MEMO_[monthKey];
+    if (map === undefined) {
+      var det = sd_detect_();
+      var cfg0 = sd_config_(sd_masterStores_(det), det);
+      map = sd_paySumsCached_(sd_extConfig_(), monthKey, cfg0) || null;
+      SD_ACTUAL_MEMO_[monthKey] = map;
+    }
+    if (!map) return null;
+    var v = map[sd_norm_(salesName)];
+    return (v != null && Number(v) > 0) ? Number(v) : null;
+  } catch (e) { return null; }
+}
+
+function sd_settle_(rows, monthKey, rateStr, fixed, salesName) {
   var rate = (parseFloat(String(rateStr).replace(/[%％]/g, '')) || 0) / 100;
   fixed = fixed || { rent: 0, ins: 0, sss: 0, f4: 0, f5: 0, total: 0 };
   var mrows = rows.filter(function (r) { return r.ym === monthKey; });
@@ -434,13 +456,15 @@ function sd_settle_(rows, monthKey, rateStr, fixed) {
     else if (k === '固定調整') adj += r.amount;
     else { varCost += r.amount; varRows.push(r); }
   });
-  var royV = Math.round(sales * rate);
+  var actualSales = sd_actualSalesFor_(salesName, monthKey);
+  var royBase = actualSales != null ? actualSales : sales; // 2026-09分以降: レジ実績（売上シート）の月間売上。取れなければ精算書の売上合計
+  var royV = Math.round(royBase * rate);
   var fixedSub = fixed.total + adj;
   var costTotal = fixedSub + varCost + royF + royV;
   var transfer = sales - costTotal;
   var ex = Math.round(transfer / 1.1);
   return {
-    sales: sales, varCost: varCost, royF: royF, royV: royV, royVarDb: royVarDb,
+    sales: sales, varCost: varCost, royF: royF, royV: royV, royVarDb: royVarDb, royBase: royBase, royBaseActual: actualSales != null,
     adj: adj, fixedSub: fixedSub, costTotal: costTotal,
     transfer: transfer, transferEx: ex, tax: transfer - ex,
     ns: royF + royV, hasSales: sales > 0, count: mrows.length,
@@ -557,7 +581,7 @@ function sd_setPaid(token, client, monthKey, done, sendMail, amount) {
       try {
         var ms = sd_mailSettings_(det, st.name);
         if (!ms || !ms.to) return; // 宛先未登録の店舗はスキップ（法人内の他店舗は続行）
-        var settle = st.db ? sd_settle_(sd_readRowsCached_(st.db), monthKey, st.rate, st.fixed) : null;
+        var settle = st.db ? sd_settle_(sd_readRowsCached_(st.db), monthKey, st.rate, st.fixed, st.salesName) : null;
         var amountLine = (settle && settle.hasSales) ? '■振込金額（税込）：' + sd_yen_(settle.transfer) + '\n' : '';
         var subject = '【お知らせ】' + mLabel + '分業務委託料 お振込完了のご連絡（' + st.name + '）';
         var body = 'ご担当者様\n\nいつも大変お世話になっております。\n' + sender + 'です。\n\n'
@@ -606,7 +630,7 @@ function sd_maybeNotifyComplete_(monthKey) {
   var allPaid = true;
   cfg.forEach(function (st) {
     if (!st.db) return;
-    var settle = sd_settle_(sd_readRowsCached_(st.db), monthKey, st.rate, st.fixed);
+    var settle = sd_settle_(sd_readRowsCached_(st.db), monthKey, st.rate, st.fixed, st.salesName);
     if (!settle.hasSales) return; // 売上未入力＝まだ精算対象でない
     var status = sd_paidStatusMap_(st.name, st.client, paid)[monthKey];
     var isPaid = !!(status && status.done);
@@ -1189,7 +1213,7 @@ function sd_getDashboard(token, monthKey) {
 
     // 精算計算（共通関数 sd_settle_ を使用）
     function settleFor(mk) {
-      return sd_settle_(byMonth[mk] || [], mk, st.rate, fixed);
+      return sd_settle_(byMonth[mk] || [], mk, st.rate, fixed, st.salesName);
     }
 
     var paidByMonth = sd_paidStatusMap_(st.name, st.client, paidAll); // 法人単位（同じ法人の店舗は同じ状態を共有）
@@ -1212,7 +1236,7 @@ function sd_getDashboard(token, monthKey) {
     var settleFull = settleFor(monthKey);
     var settle = {
       sales: settleFull.sales, varCost: settleFull.varCost, royF: settleFull.royF,
-      royV: settleFull.royV, royVarDb: settleFull.royVarDb, adj: settleFull.adj,
+      royV: settleFull.royV, royVarDb: settleFull.royVarDb, royBase: settleFull.royBase, royBaseActual: settleFull.royBaseActual, adj: settleFull.adj,
       fixedSub: settleFull.fixedSub, costTotal: settleFull.costTotal,
       transfer: settleFull.transfer, transferEx: settleFull.transferEx, tax: settleFull.tax,
       ns: settleFull.ns, hasSales: settleFull.hasSales, count: settleFull.count
@@ -2413,7 +2437,7 @@ function sd_buildSeisanHtml_(store, monthKey) {
   if (!st.db) throw new Error('店舗「' + store + '」のDBシートが見つかりません');
 
   var rows = sd_readRowsCached_(st.db);
-  var s = sd_settle_(rows, monthKey, st.rate, st.fixed);
+  var s = sd_settle_(rows, monthKey, st.rate, st.fixed, st.salesName);
   var d = sd_monthKeyToDate_(monthKey);
   var monthLabel = d.getFullYear() + '年' + (d.getMonth() + 1) + '月';
   var today = Utilities.formatDate(new Date(), SD_TZ, 'yyyy/M/d');
@@ -2507,6 +2531,7 @@ function sd_buildSeisanHtml_(store, monthKey) {
   +     '<tr><td>変動費 合計</td><td class="num">' + sd_yen_(s.varCost + s.royVarDb) + '</td></tr>'
   +     '<tr><td>固定ロイヤリティ</td><td class="num">' + sd_yen_(s.royF) + '</td></tr>'
   +     '<tr><td>ロイヤリティ（変動 ' + sd_escHtml_(st.rate) + '）</td><td class="num">' + sd_yen_(s.royV) + '</td></tr>'
+  +     (s.royBaseActual ? '<tr><td colspan="2" style="font-size:9px;color:#666">※変動ロイヤリティは、売上シート（レジ実績）の月間売上 ' + sd_yen_(s.royBase) + ' × ' + sd_escHtml_(st.rate) + ' で計算</td></tr>' : '')
   +     '<tr><td>経費合計</td><td class="num">' + sd_yen_(s.costTotal) + '</td></tr>'
   +     '<tr><td>業務委託費（税抜）</td><td class="num">' + sd_yen_(s.transferEx) + '</td></tr>'
   +     '<tr><td>消費税（10%）</td><td class="num">' + sd_yen_(s.tax) + '</td></tr>'
@@ -2879,7 +2904,7 @@ function sd_remindTick() {
     var rows = sd_readRows_(st.db);
     var byMonth = {};
     rows.forEach(function (r) { (byMonth[r.ym] = byMonth[r.ym] || []).push(r); });
-    var s = sd_settle_(rows, monthKey, st.rate, st.fixed);
+    var s = sd_settle_(rows, monthKey, st.rate, st.fixed, st.salesName);
     var chk = sd_missing_(byMonth, monthKey, st.required);
     var isSent = !!((sent[sd_norm_(st.name)] || {})[monthKey]) || (issued[sd_norm_(st.name)] || {})[monthKey] === true;
     var paidStatus = sd_paidStatusMap_(st.name, st.client, paid)[monthKey];
