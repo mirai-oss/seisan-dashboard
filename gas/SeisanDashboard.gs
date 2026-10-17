@@ -547,7 +547,7 @@ function sd_periodRows_() {
     sh = ss.insertSheet(SD_PERIOD_SHEET);
     sh.getRange(1, 1, 1, 7).setValues([['店舗名', '適用開始月（例 2026-11）', '委託先（法人名）', '法人', 'インボイス登録番号', '代表者', '備考']]);
     sh.setFrozenRows(1);
-    sh.getRange(2, 1, 1, 7).setValues([['黒霧屋 新横浜', '2026-11', 'LiveGate', '', '', '', '運営変更(トーホー→LiveGate)。委託先の名前は法人設定シートの名前と同じにする']]);
+    sh.getRange(2, 1, 1, 7).setValues([['新横浜黒霧屋', '2026-11', 'LiveGate', '', '', '', '運営変更(トーホー→LiveGate)。委託先の名前は法人設定シートの名前と同じにする']]);
     sh.autoResizeColumns(1, 7);
   }
   var out = [];
