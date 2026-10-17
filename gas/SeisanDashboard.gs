@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.26-portal-issued';
+var SD_VERSION = 'v5.27-client-period';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -33,6 +33,7 @@ var SD_ACTUAL_MEMO_ = {}; // 実行中のメモ: 対象月 → {店舗名(正規
 var SD_PAID_SHEET = '振込管理_精算ダッシュボード';
 var SD_NO_CLIENT_LABEL = '（委託先未設定）'; // 委託先（法人）が未設定の店舗をグルーピングする際の仮キー
 var SD_CORP_SHEET = '法人設定_精算ダッシュボード';
+var SD_PERIOD_SHEET = '委託先の期間設定'; // 2026-10-17: 店舗の委託先（法人）を「適用開始月」から切り替える（黒霧屋 新横浜 トーホー→LiveGate 2026-11分〜）
 var SD_CONFIG_SHEET = '設定_精算ダッシュボード';
 var SD_EXT_SHEET = '設定_外部連携';
 var SD_AUTH_SHEET = '権限_精算ダッシュボード';
@@ -256,7 +257,7 @@ function sd_clearDetectCache_() {
 function sd_detectRaw_() {
   var ss = SpreadsheetApp.getActive();
   var res = { master: null, dbs: [], statusSheet: null, mailSheet: null, sendSheet: null };
-  var own = [SD_CONFIG_SHEET, SD_EXT_SHEET, SD_AUTH_SHEET, SD_RECUR_SHEET, SD_LOG_SHEET, SD_CHECK_SHEET];
+  var own = [SD_CONFIG_SHEET, SD_EXT_SHEET, SD_AUTH_SHEET, SD_RECUR_SHEET, SD_LOG_SHEET, SD_CHECK_SHEET, SD_PERIOD_SHEET];
   ss.getSheets().forEach(function (sh) {
     var name = sh.getName();
     if (own.indexOf(name) > -1) return;
@@ -532,6 +533,56 @@ function sd_clientOf_(store) {
   return sd_clientOfMap_()[sd_norm_(store)] || SD_NO_CLIENT_LABEL;
 }
 
+/* ---------- 委託先（法人）の期間設定（2026-10-17・黒霧屋 新横浜の運営変更 トーホー→LiveGate 2026-11分〜） ----------
+ * 「店舗設定マスター」の委託先・法人・インボイス・代表者は「今の値」。運営変更で相手先が変わる店舗は、このシート
+ * （委託先の期間設定）に「店舗名・適用開始月（YYYY-MM）・委託先・法人・インボイス・代表者」を1行足す。
+ * 対象月が適用開始月以降なら、その行（開始月が最も新しいもの）の値を使い、それより前の月はマスターの値のまま
+ * ＝過去月の精算書・振込状態・ロックは変わらない。行の4項目は丸ごと置き換え（空欄は空欄＝旧法人のインボイス番号等を引き継がない）。 */
+var SD_PERIOD_MEMO_ = null; // 実行中のメモ（シートの読み直し防止）
+function sd_periodRows_() {
+  if (SD_PERIOD_MEMO_) return SD_PERIOD_MEMO_;
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SD_PERIOD_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(SD_PERIOD_SHEET);
+    sh.getRange(1, 1, 1, 7).setValues([['店舗名', '適用開始月（例 2026-11）', '委託先（法人名）', '法人', 'インボイス登録番号', '代表者', '備考']]);
+    sh.setFrozenRows(1);
+    sh.getRange(2, 1, 1, 7).setValues([['黒霧屋 新横浜', '2026-11', 'LiveGate', '', '', '', '運営変更(トーホー→LiveGate)。委託先の名前は法人設定シートの名前と同じにする']]);
+    sh.autoResizeColumns(1, 7);
+  }
+  var out = [];
+  var lastR = sh.getLastRow();
+  if (lastR > 1) {
+    sh.getRange(2, 1, lastR - 1, 7).getDisplayValues().forEach(function (r) {
+      var from = String(r[1] || '').trim().replace('/', '-');
+      if (/^\d{4}-\d$/.test(from)) from = from.slice(0, 5) + '0' + from.slice(5);
+      if (!String(r[0] || '').trim() || !/^\d{4}-\d{2}$/.test(from) || !String(r[2] || '').trim()) return;
+      out.push({ store: String(r[0]).trim(), from: from, client: String(r[2]).trim(), corp: String(r[3] || '').trim(), invoice: String(r[4] || '').trim(), rep: String(r[5] || '').trim() });
+    });
+  }
+  SD_PERIOD_MEMO_ = out;
+  return out;
+}
+/* 店舗st（設定の1件）の、対象月monthKeyにおける {client, corp, invoice, rep}。期間設定が無ければマスターの値 */
+function sd_clientInfoAt_(st, monthKey) {
+  var base = { client: st.client, corp: st.corp, invoice: st.invoice, rep: st.rep };
+  if (!monthKey) return base;
+  var best = null;
+  sd_periodRows_().forEach(function (r) {
+    if (sd_norm_(r.store) === sd_norm_(st.name) && r.from <= monthKey && (!best || r.from > best.from)) best = r;
+  });
+  return best ? { client: best.client, corp: best.corp, invoice: best.invoice, rep: best.rep } : base;
+}
+/* 店舗名＋対象月だけ分かっている場面用（ロック判定など）。マスターの委託先に期間設定を重ねた委託先名を返す */
+function sd_clientAtByName_(store, monthKey) {
+  var base = sd_clientOf_(store);
+  var best = null;
+  sd_periodRows_().forEach(function (r) {
+    if (sd_norm_(r.store) === sd_norm_(store) && r.from <= monthKey && (!best || r.from > best.from)) best = r;
+  });
+  return best ? best.client : base;
+}
+
 /* 振込状態は法人（委託先）単位が正。旧・店舗単位の記録（v5.7以前）もフォールバックとして見る。 */
 function sd_paidStatusMap_(store, client, paidAll) {
   var byClient = (paidAll[sd_norm_(client || SD_NO_CLIENT_LABEL)] || {});
@@ -553,7 +604,7 @@ function sd_setPaid(token, client, monthKey, done, sendMail, amount) {
   var user = sd_auth_(token, true);
   var det = sd_detect_();
   var cfg = sd_config_(sd_masterStores_(det), det);
-  var members = cfg.filter(function (s) { return sd_norm_(s.client ? s.client : SD_NO_CLIENT_LABEL) === sd_norm_(client); });
+  var members = cfg.filter(function (s) { var c0 = sd_clientInfoAt_(s, monthKey).client; return sd_norm_(c0 ? c0 : SD_NO_CLIENT_LABEL) === sd_norm_(client); });
   if (!members.length) throw new Error('「' + client + '」に該当する店舗が見つかりません');
 
   // 振込済み→未振込に戻す（ロック解除）操作はマスターのみ許可。振込済みにする操作（ロック開始）は本部でも可。
@@ -632,7 +683,7 @@ function sd_maybeNotifyComplete_(monthKey) {
     if (!st.db) return;
     var settle = sd_settle_(sd_readRowsCached_(st.db), monthKey, st.rate, st.fixed, st.salesName);
     if (!settle.hasSales) return; // 売上未入力＝まだ精算対象でない
-    var status = sd_paidStatusMap_(st.name, st.client, paid)[monthKey];
+    var status = sd_paidStatusMap_(st.name, sd_clientInfoAt_(st, monthKey).client, paid)[monthKey];
     var isPaid = !!(status && status.done);
     targets.push({ name: st.name, transfer: settle.transfer, paid: isPaid });
     if (!isPaid) allPaid = false;
@@ -977,7 +1028,7 @@ function sd_requireMaster_(user) {
  * （振込は法人単位でまとめて行われるため、ロックも法人配下の全店舗にかかる） */
 function sd_isLocked_(store, monthKey) {
   var paid = sd_paidMap_();
-  var client = sd_clientOf_(store);
+  var client = sd_clientAtByName_(store, monthKey);
   var rec = sd_paidStatusMap_(store, client, paid)[monthKey];
   return !!(rec && rec.done);
 }
@@ -1216,7 +1267,9 @@ function sd_getDashboard(token, monthKey) {
       return sd_settle_(byMonth[mk] || [], mk, st.rate, fixed, st.salesName);
     }
 
-    var paidByMonth = sd_paidStatusMap_(st.name, st.client, paidAll); // 法人単位（同じ法人の店舗は同じ状態を共有）
+    // 法人単位（同じ法人の店舗は同じ状態を共有）。委託先が期間で変わる店舗は、月ごとにその月の法人の記録を引く
+    var paidByMonth = {};
+    months.concat([monthKey]).forEach(function (mk) { paidByMonth[mk] = sd_paidStatusMap_(st.name, sd_clientInfoAt_(st, mk).client, paidAll)[mk]; });
     var matrix = {};
     months.forEach(function (mk) {
       var s = settleFor(mk);
@@ -1259,7 +1312,7 @@ function sd_getDashboard(token, monthKey) {
     }
 
     return {
-      name: st.name, client: st.client, rate: st.rate,
+      name: st.name, client: sd_clientInfoAt_(st, monthKey).client, rate: st.rate,
       fixed: fixed,
       dbSheet: st.db ? st.db.sheet : '', hasDb: !!st.db,
       matrix: matrix,
@@ -2436,6 +2489,7 @@ function sd_buildSeisanHtml_(store, monthKey) {
   if (!st) throw new Error('店舗が見つかりません: ' + store);
   if (!st.db) throw new Error('店舗「' + store + '」のDBシートが見つかりません');
 
+  var ci = sd_clientInfoAt_(st, monthKey); // 対象月の委託先（運営変更で切り替わる店舗は期間設定を反映）
   var rows = sd_readRowsCached_(st.db);
   var s = sd_settle_(rows, monthKey, st.rate, st.fixed, st.salesName);
   var d = sd_monthKeyToDate_(monthKey);
@@ -2493,10 +2547,10 @@ function sd_buildSeisanHtml_(store, monthKey) {
   + '<h1>業 務 委 託 精 算 書</h1>'
   + '<div class="sub">' + sd_escHtml_(store) + '　' + monthLabel + '分</div>'
   + '<table class="parties"><tr><td>'
-  +   '<div class="to">' + sd_escHtml_(st.client || '') + '　御中</div>'
+  +   '<div class="to">' + sd_escHtml_(ci.client || '') + '　御中</div>'
   +   (st.name ? sd_escHtml_(st.name) + '<br>' : '')
-  +   (st.rep ? sd_escHtml_(st.rep) + '　様<br>' : '')
-  +   (st.invoice ? sd_escHtml_(st.invoice) : '')
+  +   (ci.rep ? sd_escHtml_(ci.rep) + '　様<br>' : '')
+  +   (ci.invoice ? sd_escHtml_(ci.invoice) : '')
   + '</td><td>'
   +   '<div style="text-align:right">発行日：' + today + '</div>'
   +   '<b>' + sd_escHtml_(ext['発行元_会社名'] || '株式会社N-style') + '</b><br>'
@@ -2938,7 +2992,7 @@ function sd_remindTick() {
     var s = sd_settle_(rows, monthKey, st.rate, st.fixed, st.salesName);
     var chk = sd_missing_(byMonth, monthKey, st.required);
     var isSent = !!((sent[sd_norm_(st.name)] || {})[monthKey]) || (issued[sd_norm_(st.name)] || {})[monthKey] === true;
-    var paidStatus = sd_paidStatusMap_(st.name, st.client, paid)[monthKey];
+    var paidStatus = sd_paidStatusMap_(st.name, sd_clientInfoAt_(st, monthKey).client, paid)[monthKey];
     var isPaid = !!(paidStatus && paidStatus.done);
     var status = isPaid ? '💰振込済み' : (isSent ? '✅発行済み（振込待ち）' : (s.count > 0 ? '🟡入力中 ' + s.count + '件' : '❌未入力'));
     var warns = chk.catWarn.concat(chk.missing);
@@ -3228,8 +3282,8 @@ function sd_getSettings(token) {
   var corps = sd_corpMap_(cfg);
   var corpList = [];
   var seen = {};
-  cfg.forEach(function (st) {
-    var c = st.client || '';
+  var clientNames = cfg.map(function (st) { return st.client || ''; }).concat(sd_periodRows_().map(function (r) { return r.client; })); // 期間設定の委託先（LiveGate等）も振込先の登録対象に出す
+  clientNames.forEach(function (c) {
     if (c && !seen[sd_norm_(c)]) {
       seen[sd_norm_(c)] = true;
       var info = corps[sd_norm_(c)] || {};
