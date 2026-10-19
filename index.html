@@ -1276,10 +1276,39 @@ function openEditRow(rowIdx){
     +'<div class="settle-entry-top" style="grid-template-columns:1fr 1fr"><div><label>勘定科目（PL連携用。ロイヤリティ等は「対象外」）</label><select id="ed-account">'+accOpts+'</select></div>'
     +'<div><label>補助科目（任意）</label><input id="ed-subaccount" value="'+esc(r.subAccount||'')+'"></div></div>'
     +'<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>備考</label><input id="ed-note" value="'+esc(r.note||'')+'"></div></div>'
+    +'<div style="margin:8px 0"><label style="font-size:12px;color:var(--muted)">📎 この明細に付いている添付ファイル</label><div id="ed-attach" class="muted">読み込み中…</div></div>'
     +'<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>📎 資料を追加/差し替え（任意）</label><input type="file" id="ed-file"></div></div>'
     +'<p class="muted">ファイルを選ぶと、この費目名で保存します。同名の資料が既にある場合は上書きせず「【再】…」で保存され、修正版だとわかります。</p>';
   openModal('✏ 明細を修正', body,
     '<button class="btn primary" onclick="saveEditRow('+rowIdx+')">修正を保存</button><button class="btn" onclick="closeModal()">閉じる</button>');
+  editAttachCtx={store:st.name,month:state.month,rowIdx:rowIdx};
+  loadEditAttach_();
+}
+/* 2026-10-19: 明細の修正画面に、この明細の添付ファイルを並べて、間違ったものをその場で削除できるようにする */
+var editAttachCtx=null;
+function loadEditAttach_(){
+  var c=editAttachCtx; if(!c) return;
+  apiAuth('sd_listAttachments', c.store, c.month).then(function(files){ renderEditAttach_(files); })
+    .catch(function(e){ var el=document.getElementById('ed-attach'); if(el) el.textContent='添付一覧を取得できませんでした: '+(e.message||e); });
+}
+function renderEditAttach_(files){
+  var c=editAttachCtx, el=document.getElementById('ed-attach'); if(!c||!el) return;
+  var st=currentStore(); if(!st||st.name!==c.store) return;
+  var r=st.detail.rows[c.rowIdx]; if(!r) return;
+  var mine=matchAttachFiles(r.item, c.month, st.name, files, r, st.detail.rows);
+  el.className='';
+  if(!mine.length){ el.innerHTML='<span class="muted">この明細に結びついた添付はありません</span>'; return; }
+  el.innerHTML='<table class="settle-table">'+mine.map(function(f){
+    return '<tr><td>'+esc(f.name)+'</td><td>'+esc(f.date)+'</td><td><a class="plain" href="'+esc(f.url)+'" target="_blank" rel="noopener">開く ↗</a> '
+      +'<button class="settle-editbtn" onclick="deleteEditAttach_(\''+esc(f.id)+'\',\''+esc(f.name).replace(/'/g,"\\'")+'\')">🗑 削除</button></td></tr>';
+  }).join('')+'</table>';
+}
+function deleteEditAttach_(fileId,name){
+  var c=editAttachCtx; if(!c) return;
+  if(!confirm('【確認】この添付ファイルを削除します。\n\n'+name+'\n\n（Googleドライブの「ゴミ箱」に移ります。30日以内なら元に戻せます）\nよろしいですか？')) return;
+  var el=document.getElementById('ed-attach'); if(el) el.innerHTML='<span class="muted">削除中…</span>';
+  apiAuth('sd_deleteAttachment', c.store, c.month, fileId).then(function(){ toast('🗑 削除しました'); loadEditAttach_(); loadDashboard(c.month,true); })
+    .catch(function(e){ toast('削除エラー: '+(e.message||e)); loadEditAttach_(); });
 }
 function saveEditRow(rowIdx){
   var st=currentStore(); if(!st) return;
