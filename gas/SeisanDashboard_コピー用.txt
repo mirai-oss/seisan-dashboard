@@ -58,7 +58,8 @@ var SD_API_WHITELIST = [
   'sd_saveStoreRate', 'sd_saveRecurStatus', 'sd_saveOpsSettings', 'sd_getOpsSettings',
   'sd_suggestAccount', 'sd_bulkCategorize', 'sd_apiCategorizedLines', 'sd_apiAddExternalLine',
   'sd_apiGetLines', 'sd_apiMarkPlSynced', 'sd_apiSuggestMapping', 'sd_apiConfirmMapping',
-  'sd_apiUploadAttachment', 'sd_apiDebugExtRef', 'sd_apiCashSync', 'sd_apiRemoveExternalLine'
+  'sd_apiUploadAttachment', 'sd_apiDebugExtRef', 'sd_apiCashSync', 'sd_apiRemoveExternalLine',
+  'sd_deleteAttachment'
 ];
 
 function sd_apiFnMap_() {
@@ -79,7 +80,8 @@ function sd_apiFnMap_() {
     sd_apiGetLines: sd_apiGetLines, sd_apiMarkPlSynced: sd_apiMarkPlSynced,
     sd_apiSuggestMapping: sd_apiSuggestMapping, sd_apiConfirmMapping: sd_apiConfirmMapping,
     sd_apiUploadAttachment: sd_apiUploadAttachment, sd_apiDebugExtRef: sd_apiDebugExtRef,
-    sd_apiCashSync: sd_apiCashSync, sd_apiRemoveExternalLine: sd_apiRemoveExternalLine
+    sd_apiCashSync: sd_apiCashSync, sd_apiRemoveExternalLine: sd_apiRemoveExternalLine,
+    sd_deleteAttachment: sd_deleteAttachment
   };
 }
 
@@ -1284,7 +1286,7 @@ function sd_getDashboard(token, monthKey) {
     });
     var chk = st.db ? sd_missing_(byMonth, monthKey, st.required) : { missing: [], catWarn: ['DBシート未検出'] };
     var curRows = (byMonth[monthKey] || []).map(function (r) {
-      return { row: r.row, kubun: r.kubun, item: r.item, amount: r.amount, tax: r.tax, note: r.note, editor: r.editor, at: r.at, edited: r.edited, account: r.account, subAccount: r.subAccount };
+      return { row: r.row, kubun: r.kubun, item: r.item, amount: r.amount, tax: r.tax, note: r.note, editor: r.editor, at: r.at, edited: r.edited, account: r.account, subAccount: r.subAccount, extRef: r.extRef || '' };
     });
     var settleFull = settleFor(monthKey);
     var settle = {
@@ -3116,6 +3118,10 @@ function sd_apiUploadAttachment(token, store, monthKey, payload) {
     var extension = extMatch ? extMatch[0] : '';
     var folder = sd_folderFor_(ext, monthKey, store);
     var baseName = kind + '_' + sd_monthDot_(monthKey) + '_' + store;
+    // 2026-10-19: 同じ費目名の別請求書が、互いの添付を上書き（ゴミ箱送り）して「添付が入れ替わる」問題への対応。
+    // 請求書ごとの識別子（uniq・英数字8文字まで）を名前の末尾に付け、別の請求書の添付は別ファイルとして残す
+    var uniq = String(payload.uniq || '').replace(/[^0-9A-Za-z]/g, '').slice(0, 8);
+    if (uniq) baseName += '__' + uniq;
     var newName = baseName + extension;
     // 冪等: 同名の既存ファイルがあれば先にゴミ箱へ移動してから作り直す（重複蓄積を防ぐ）
     var existing = folder.getFilesByName(newName);
@@ -3130,6 +3136,25 @@ function sd_apiUploadAttachment(token, store, monthKey, payload) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/* 間違えて添付したファイルの削除（2026-10-19新設）。本部以上のみ。振込済みロック中はマスター等のみ。
+ * Driveのゴミ箱に移すだけ（30日以内ならDriveの「ゴミ箱」から元に戻せる）。この店舗・月のフォルダ内のファイルだけが対象 */
+function sd_deleteAttachment(token, store, monthKey, fileId) {
+  var user = sd_auth_(token, true);
+  sd_requireUnlocked_(user, store, monthKey);
+  var det = sd_detect_();
+  var cfg = sd_allowedStores_(user, sd_config_(sd_masterStores_(det), det));
+  if (!cfg.some(function (s) { return s.name === store; })) throw new Error('この店舗の権限がありません');
+  var ext = sd_extConfig_();
+  var folder = sd_folderFor_(ext, monthKey, store);
+  var it = folder.getFiles(), target = null;
+  while (it.hasNext()) { var f = it.next(); if (f.getId() === fileId) { target = f; break; } }
+  if (!target) throw new Error('この店舗・月のフォルダにそのファイルは見つかりません（すでに削除された可能性があります）');
+  var name = target.getName();
+  target.setTrashed(true);
+  sd_log_('添付削除', store, monthKey, name, fileId, '', user.name, '');
+  return { ok: true, name: name };
 }
 
 function sd_listAttachments(token, store, monthKey) {

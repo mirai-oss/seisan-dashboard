@@ -1183,12 +1183,26 @@ function currentStore(){
   return null;
 }
 /* 明細の費目名と添付ファイル名（種類_年.月_店舗名）を突き合わせ、行ごとに開くリンクを出す */
-function matchAttachFiles(item, monthKey, store, files){
+function matchAttachFiles(item, monthKey, store, files, row, rows){
   var wanted = item + '_' + monthKey.replace('-','.') + '_' + store;
-  return (files||[]).filter(function(f){
+  // 2026-10-19: 前方一致だと「新横浜」が「新横浜2号店」の添付まで拾う等で、別の経費の添付が混ざった。
+  // 費目名_年.月_店舗名 の直後が「（請求書識別子）＋拡張子」だけのものに限る
+  var restRe = /^(?:__([0-9A-Za-z]{1,8}))?(?:\(\d+\))?(?:\.[A-Za-z0-9]+)?$/;
+  var all = [];
+  (files||[]).forEach(function(f){
     var name = String(f.name||'').replace(/^【再\d*】/,'');
-    return name.indexOf(wanted) === 0;
+    if(name.indexOf(wanted) !== 0) return;
+    var m = restRe.exec(name.slice(wanted.length)); if(!m) return;
+    all.push({f:f, uniq:m[1]||''});
   });
+  // 請求書識別子つきの添付は、その請求書から作られた行（外部参照IDに識別子を含む）にだけ出す。
+  // どの行も名乗り出ない識別子（過去分など）は、同じ費目名の行に出す
+  var claimed = function(u){ return (rows||[]).some(function(r){ return String(r.extRef||'').indexOf('invoice:'+u) === 0; }); };
+  return all.filter(function(x){
+    if(!x.uniq) return true;
+    if(row && String(row.extRef||'').indexOf('invoice:'+x.uniq) === 0) return true;
+    return !claimed(x.uniq);
+  }).map(function(x){ return x.f; });
 }
 function attachCellHtml(files){
   if(!files || !files.length) return '<span class="muted">－</span>';
@@ -1222,7 +1236,7 @@ function renderExisting(){
             ? '<button class="settle-editbtn" disabled title="振込済みのためロック中">🗑 削除</button>'
             : '<button class="settle-editbtn" onclick="deleteRow('+i+')">🗑 削除</button>')
         : '';
-      var attach = attachCellHtml(matchAttachFiles(r.item, mk, st.name, files));
+      var attach = attachCellHtml(matchAttachFiles(r.item, mk, st.name, files, r, rows));
       var accHtml = r.account ? esc(r.account)+(r.subAccount?'<br><span class="muted">'+esc(r.subAccount)+'</span>':'') : '<span class="muted">－</span>';
       return '<tr><td>'+editBtn+' '+delBtn+'</td><td>'+esc(r.kubun)+'</td><td>'+esc(r.item)+'</td><td>'+accHtml+'</td><td style="text-align:right">'+yen(r.amount)+'</td><td>'+esc(r.tax)+'</td><td>'+esc(r.note)+'</td><td>'+attach+'</td><td>'+esc(r.editor)+'</td><td>'+esc(r.at)+'</td><td>'+esc(r.edited||'')+'</td></tr>';
     }).join('');
@@ -1555,9 +1569,12 @@ function openAttach(storeIdx){
   }).catch(function(e){ loading(false); toast('エラー: '+(e.message||e)); });
 }
 function renderAttachModal(storeName, files){
+  attachCtx.files=files||[];
   var list = files.length
     ? '<table class="settle-table"><tr><th>ファイル名</th><th>登録日</th><th></th></tr>'+files.map(function(f){
-        return '<tr><td>'+esc(f.name)+'</td><td>'+esc(f.date)+'</td><td><a class="plain" href="'+esc(f.url)+'" target="_blank" rel="noopener">開く ↗</a></td></tr>';
+        var delB = (isHonbu() && !isLockedFor((state.data.stores||[]).filter(function(x){return x.name===storeName;})[0]))
+          ? ' <button class="settle-editbtn" onclick="deleteAttach(\''+esc(f.id)+'\')">🗑 削除</button>' : '';
+        return '<tr><td>'+esc(f.name)+'</td><td>'+esc(f.date)+'</td><td><a class="plain" href="'+esc(f.url)+'" target="_blank" rel="noopener">開く ↗</a>'+delB+'</td></tr>';
       }).join('')+'</table>'
     : '<p class="muted">この月の添付はまだありません</p>';
   var up = isHonbu()
@@ -1569,6 +1586,16 @@ function renderAttachModal(storeName, files){
       +'</div>'
     : '';
   openModal('📎 '+storeName+'　'+state.data.monthLabel+'分の添付書類', list+up);
+}
+function deleteAttach(fileId){
+  var f=(attachCtx.files||[]).filter(function(x){return x.id===fileId;})[0];
+  if(!f){ toast('ファイルが見つかりません。開き直してください'); return; }
+  if(!confirm('【確認】この添付ファイルを削除します。\n\n'+f.name+'\n\n（Googleドライブの「ゴミ箱」に移ります。30日以内なら元に戻せます）\nよろしいですか？')) return;
+  loading(true,'削除中…');
+  apiAuth('sd_deleteAttachment', attachCtx.store, state.month, fileId).then(function(){
+    return apiAuth('sd_listAttachments', attachCtx.store, state.month);
+  }).then(function(files){ loading(false); toast('🗑 削除しました'); renderAttachModal(attachCtx.store, files); loadDashboard(state.month,true); })
+    .catch(function(e){ loading(false); toast('削除エラー: '+(e.message||e)); });
 }
 function uploadAttach(){
   var kind=document.getElementById('att-kind').value.trim();
