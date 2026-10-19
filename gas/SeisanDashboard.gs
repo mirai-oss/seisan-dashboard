@@ -59,7 +59,7 @@ var SD_API_WHITELIST = [
   'sd_suggestAccount', 'sd_bulkCategorize', 'sd_apiCategorizedLines', 'sd_apiAddExternalLine',
   'sd_apiGetLines', 'sd_apiMarkPlSynced', 'sd_apiSuggestMapping', 'sd_apiConfirmMapping',
   'sd_apiUploadAttachment', 'sd_apiDebugExtRef', 'sd_apiCashSync', 'sd_apiRemoveExternalLine',
-  'sd_deleteAttachment'
+  'sd_deleteAttachment', 'sd_apiGetSettlementPdf'
 ];
 
 function sd_apiFnMap_() {
@@ -81,7 +81,7 @@ function sd_apiFnMap_() {
     sd_apiSuggestMapping: sd_apiSuggestMapping, sd_apiConfirmMapping: sd_apiConfirmMapping,
     sd_apiUploadAttachment: sd_apiUploadAttachment, sd_apiDebugExtRef: sd_apiDebugExtRef,
     sd_apiCashSync: sd_apiCashSync, sd_apiRemoveExternalLine: sd_apiRemoveExternalLine,
-    sd_deleteAttachment: sd_deleteAttachment
+    sd_deleteAttachment: sd_deleteAttachment, sd_apiGetSettlementPdf: sd_apiGetSettlementPdf
   };
 }
 
@@ -3136,6 +3136,19 @@ function sd_apiUploadAttachment(token, store, monthKey, payload) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/* API（2026-10-19新設）: 精算書PDFを今の内容で作り直して返す（保存もメール送信もしない）。
+ * ポータルが、法人まとめ（Mostfun等）の請求書に全店舗分の精算書PDFを付けるために使う。PL_SYNC_TOKEN認証 */
+function sd_apiGetSettlementPdf(token, store, monthKey) {
+  var tk = PropertiesService.getScriptProperties().getProperty('PL_SYNC_TOKEN');
+  var got = String(token || '').trim(), want = String(tk || '').trim();
+  if (!tk || got !== want) return { ok: false, error: 'unauthorized' };
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey || ''))) return { ok: false, error: '年月が不正です（例: 2026-09）' };
+  try {
+    var blob = sd_renderPdf_(store, monthKey);
+    return { ok: true, file_name: blob.getName(), base64: Utilities.base64Encode(blob.getBytes()) };
+  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
 }
 
 /* 間違えて添付したファイルの削除（2026-10-19新設）。本部以上のみ。振込済みロック中はマスター等のみ。
