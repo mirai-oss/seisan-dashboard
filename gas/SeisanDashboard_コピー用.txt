@@ -602,6 +602,20 @@ function sd_paidStatusMap_(store, client, paidAll) {
 }
 
 /* client: 法人名（委託先未設定の店舗群はSD_NO_CLIENT_LABEL）。振込はその法人配下の全店舗分をまとめて記録する。 */
+/* 2026-10-19: 精算書を「振込済み」にした直後に、tori-dashboardのGitHub Actions「精算書の勘定科目PL自動連携」をその月だけ起動する。
+ * 従来は毎週月曜の朝だけ動いていたため、振込済みにしても最大1週間PLに入らなかった。週次の実行は「確認のための再同期」として残す。
+ * 認証: スクリプトプロパティ GH_TOKEN（tori-dashboardのGAS LarkCron.gsと同じトークン）。未設定なら何もしない */
+function sd_dispatchPlSync_(monthKey) {
+  var token = PropertiesService.getScriptProperties().getProperty('GH_TOKEN');
+  if (!token || !/^\d{4}-\d{2}$/.test(String(monthKey || ''))) return;
+  var res = UrlFetchApp.fetch('https://api.github.com/repos/mirai-oss/tori-dashboard/actions/workflows/seisan-category-pl-sync.yml/dispatches', {
+    method: 'post', contentType: 'application/json',
+    headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'seisan-dashboard' },
+    payload: JSON.stringify({ ref: 'main', inputs: { ym: monthKey } }), muteHttpExceptions: true
+  });
+  if (res.getResponseCode() >= 300) Logger.log('PL同期の起動に失敗（' + res.getResponseCode() + '）: ' + String(res.getContentText()).slice(0, 200));
+}
+
 function sd_setPaid(token, client, monthKey, done, sendMail, amount) {
   var user = sd_auth_(token, true);
   var det = sd_detect_();
@@ -623,6 +637,7 @@ function sd_setPaid(token, client, monthKey, done, sendMail, amount) {
     done ? Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd') : '', user.name,
     done ? amt : ''];
   sh.appendRow(rec); // 履歴として毎回追加（上書きしない）
+  if (done) { try { sd_dispatchPlSync_(monthKey); } catch (e) { Logger.log('PL同期の起動に失敗: ' + e); } }   // 2026-10-19: 振込済みにした時点で、その月のPL同期（精算書の経費→PL）をすぐ起動する（失敗しても振込済みは有効）
 
   var result = { ok: true, client: client, month: monthKey, done: !!done, mailed: false, amount: done ? amt : null, mailedStores: [] };
   if (done && sendMail) {
