@@ -613,7 +613,14 @@ function sd_dispatchPlSync_(monthKey) {
     headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'seisan-dashboard' },
     payload: JSON.stringify({ ref: 'main', inputs: { ym: monthKey } }), muteHttpExceptions: true
   });
-  if (res.getResponseCode() >= 300) Logger.log('PL同期の起動に失敗（' + res.getResponseCode() + '）: ' + String(res.getContentText()).slice(0, 200));
+  if (res.getResponseCode() >= 300) Logger.log('PL同期（経費）の起動に失敗（' + res.getResponseCode() + '）: ' + String(res.getContentText()).slice(0, 200));
+  // 運営委託費のPL同期も同じ月で起動する（こちらは別の仕組み。起動し忘れると運営委託費だけPLに入らない）
+  var res2 = UrlFetchApp.fetch('https://api.github.com/repos/mirai-oss/tori-dashboard/actions/workflows/seisan-fee-sync.yml/dispatches', {
+    method: 'post', contentType: 'application/json',
+    headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'seisan-dashboard' },
+    payload: JSON.stringify({ ref: 'main', inputs: { ym: monthKey } }), muteHttpExceptions: true
+  });
+  if (res2.getResponseCode() >= 300) Logger.log('PL同期（運営委託費）の起動に失敗（' + res2.getResponseCode() + '）: ' + String(res2.getContentText()).slice(0, 200));
 }
 
 function sd_setPaid(token, client, monthKey, done, sendMail, amount) {
@@ -1764,6 +1771,8 @@ function sd_apiCategorizedLines(token, store, monthKey) {
   rows.forEach(function (r) {
     var account = String(r.account || '').trim();
     if (!account || account === '対象外' || account === '運営委託費') return;
+    // 2026-10-19: 売上の行（区分=売上、または勘定科目が売上高・その他売上）はPLへ反映しない（売上高が「経費」の区分でPLに入ってしまう問題への対応。経費だけを反映する）
+    if (String(r.kubun || '').trim() === '売上' || account === '売上高' || account === 'その他売上') return;
     var sub = String(r.subAccount || '').trim();
     var rate = taxRate[sd_norm_(r.tax)] || 1.1;
     var key = account + '\t' + sub;
