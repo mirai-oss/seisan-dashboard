@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.27-client-period';
+var SD_VERSION = 'v5.28-speed1';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -974,9 +974,12 @@ function sd_sessionGet_(token){
   if (sd_sessionBackend_() === 'supabase') {
     var hit = sd_sessionSupaGet_(token);
     if (hit) {
-      var expS = new Date().getTime() + SD_TOKEN_HOURS * 3600 * 1000;   // 使うたびに期限を延長（Propertiesと同じsliding TTL）
-      sd_sessionSupaPut_(token, hit.sess, expS);
-      sd_sessionStore_().setProperty('sdtok_' + token, JSON.stringify({ sess: hit.sess, exp: expS }));   // Propertiesにも同期
+      // 期限の延長（sliding TTL）は、残りが半分を切ったときだけ書く（毎回Supabase＋Propertiesへ書くと1呼び出しあたり0.3〜1秒かかるため・2026-10-20）
+      if (hit.exp - new Date().getTime() < SD_TOKEN_HOURS * 3600 * 1000 * 0.5) {
+        var expS = new Date().getTime() + SD_TOKEN_HOURS * 3600 * 1000;
+        sd_sessionSupaPut_(token, hit.sess, expS);
+        sd_sessionStore_().setProperty('sdtok_' + token, JSON.stringify({ sess: hit.sess, exp: expS }));   // Propertiesにも同期
+      }
       return hit.sess;
     }
     // ds_sessionsに無い＝移行前の古いセッション、またはSupabase側の一時不調。Propertiesへフォールバック
@@ -986,9 +989,12 @@ function sd_sessionGet_(token){
   if (!raw) return null;
   var obj; try { obj = JSON.parse(raw); } catch (e) { return null; }
   if (!obj.exp || new Date().getTime() > obj.exp) { store.deleteProperty('sdtok_' + token); return null; }
-  obj.exp = new Date().getTime() + SD_TOKEN_HOURS * 3600 * 1000; // 使うたびに期限を延長
-  store.setProperty('sdtok_' + token, JSON.stringify(obj));
-  sd_sessionSupaPut_(token, obj.sess, obj.exp);   // Propertiesにしかなかった旧セッションもここでSupabaseへ複製
+  // 残りが半分を切ったときだけ延長して書く（毎回書くと遅いため・2026-10-20）。初回(Supabaseに無い旧セッション)の複製は、延長のついでに行われる
+  if (obj.exp - new Date().getTime() < SD_TOKEN_HOURS * 3600 * 1000 * 0.5) {
+    obj.exp = new Date().getTime() + SD_TOKEN_HOURS * 3600 * 1000;
+    store.setProperty('sdtok_' + token, JSON.stringify(obj));
+    sd_sessionSupaPut_(token, obj.sess, obj.exp);   // Propertiesにしかなかった旧セッションもここでSupabaseへ複製
+  }
   return obj.sess;
 }
 function sd_sessionDel_(token){ sd_sessionStore_().deleteProperty('sdtok_' + token); sd_sessionSupaDel_(token); }
@@ -2695,6 +2701,7 @@ function sd_issueAndSend(token, store, monthKey, sendMail) {
     // Driveへ保存: 親フォルダ/2026年6月/店舗名/
     var folder = sd_folderFor_(ext, monthKey, store);
     var file = folder.createFile(blob);
+    sd_attachCacheClear_(monthKey, store);
     var result = { ok: true, fileName: blob.getName(), fileId: file.getId(), url: file.getUrl(), mailed: false, resend: isResend };
 
     if (sendMail) {
@@ -3103,6 +3110,7 @@ function sd_uploadAttachment(token, payload) {
   var blob = Utilities.newBlob(bytes, payload.mimeType || 'application/octet-stream', newName);
   timer.mark('decode');
   var file = folder.createFile(blob);
+  sd_attachCacheClear_(payload.month, payload.store);
   timer.mark('driveCreate');
   sd_log_(payload.revised ? '添付（修正版）' : '添付アップロード', payload.store, payload.month, newName, file.getId(), file.getUrl(), user.name, '');
   timer.mark('log');
@@ -3153,6 +3161,7 @@ function sd_apiUploadAttachment(token, store, monthKey, payload) {
     var bytes = Utilities.base64Decode(payload.b64);
     var blob = Utilities.newBlob(bytes, payload.mimeType || 'application/octet-stream', newName);
     var file = folder.createFile(blob);
+    sd_attachCacheClear_(monthKey, store);
     sd_log_('添付アップロード（自動連携）', store, monthKey, newName, file.getId(), file.getUrl(), '自動連携', '');
     return { ok: true, name: newName, url: file.getUrl() };
   } catch (e) {
@@ -3190,15 +3199,30 @@ function sd_deleteAttachment(token, store, monthKey, fileId) {
   if (!target) throw new Error('この店舗・月のフォルダにそのファイルは見つかりません（すでに削除された可能性があります）');
   var name = target.getName();
   target.setTrashed(true);
+  sd_attachCacheClear_(monthKey, store);
   sd_log_('添付削除', store, monthKey, name, fileId, '', user.name, '');
   return { ok: true, name: name };
 }
 
+/* 店舗の閲覧権限チェック（軽量版）。sd_allowedStores_と同じ判定を、10分キャッシュ済みの店舗一覧(sd_clientOfMap_)で行い、
+ * 設定シート群(sd_config_)の全読みを避ける（添付一覧のたびに数秒かかっていたため・2026-10-20）。 */
+function sd_canViewStore_(user, store) {
+  if (!(sd_norm_(store) in sd_clientOfMap_())) return false;
+  if (user.role === '本部' || sd_norm_(user.storesRaw) === '全店' || !user.storesRaw) return true;
+  var names = user.storesRaw.split(/[,、，]/).map(function (x) { return sd_norm_(x); }).filter(String);
+  return names.indexOf(sd_norm_(store)) > -1;
+}
+/* 添付一覧の短時間キャッシュ（60秒）。アップロード・削除・精算書の発行で破棄する */
+function sd_attachCacheKey_(monthKey, store) { return 'sdatt_' + monthKey + '_' + sd_norm_(store); }
+function sd_attachCacheClear_(monthKey, store) { try { CacheService.getScriptCache().remove(sd_attachCacheKey_(monthKey, store)); } catch (e) { /* noop */ } }
 function sd_listAttachments(token, store, monthKey) {
   var user = sd_auth_(token, false);
-  var det = sd_detect_();
-  var cfg = sd_allowedStores_(user, sd_config_(sd_masterStores_(det), det));
-  if (!cfg.some(function (s) { return s.name === store; })) throw new Error('この店舗の閲覧権限がありません');
+  if (!sd_canViewStore_(user, store)) throw new Error('この店舗の閲覧権限がありません');
+  var ck = sd_attachCacheKey_(monthKey, store);
+  try {
+    var hit = CacheService.getScriptCache().get(ck);
+    if (hit) return JSON.parse(hit);
+  } catch (e) { /* キャッシュが壊れていたら通常経路 */ }
   var ext = sd_extConfig_();
   var out = [];
   try {
@@ -3210,6 +3234,7 @@ function sd_listAttachments(token, store, monthKey) {
     }
   } catch (e) { /* フォルダ未作成なら空 */ }
   out.sort(function (a, b) { return a.name < b.name ? -1 : 1; });
+  try { CacheService.getScriptCache().put(ck, JSON.stringify(out), 60); } catch (e) { /* 100KB超などは諦める */ }
   return out;
 }
 

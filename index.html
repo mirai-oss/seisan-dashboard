@@ -676,13 +676,15 @@ function isMaster(){ return state.data && state.data.user.role==='マスター';
 function isLockedFor(st){ return !!(st && st.detail && st.detail.locked) && !isMaster(); }
 
 var dashCache={};
+var dashCacheAt={}; // 月ごとの取得時刻（背景更新を間引く用・2026-10-20）
 function loadDashboard(monthKey, force){
   var key=monthKey||'__default__';
   if(force) dashCache={}; // 書き込み後は全月キャッシュを破棄
   if(!force && dashCache[key]){
     // キャッシュ即表示（裏で最新も取得して差し替え）
     state.data=dashCache[key]; state.month=dashCache[key].month; render();
-    refreshInBackground(monthKey, key);
+    // 取得から45秒以内なら背景更新はしない（月を行き来するたびに重い取得を重ねない・2026-10-20）
+    if(Date.now()-(dashCacheAt[key]||0)>45000) refreshInBackground(monthKey, key);
     return;
   }
   // 直前に修正/削除/登録などが計測中でなければ、この読み込み単体を1操作として計測する
@@ -693,7 +695,7 @@ function loadDashboard(monthKey, force){
     var rt=Math.round(performance.now()-t0);
     perfStep('再読込', data._ms?data._ms.total:null, rt, data._ms);
     perfOpEnd(); // ここで一連の操作（修正→再読込 等）の合計が確定する
-    dashCache[key]=data; dashCache[data.month]=data;
+    dashCache[key]=data; dashCache[data.month]=data; dashCacheAt[key]=dashCacheAt[data.month]=Date.now();
     state.data=data; state.month=data.month;
     render();
     loading(false);
@@ -704,22 +706,31 @@ function loadDashboard(monthKey, force){
 // 従来はそこだけ「読み込み中」が出ていた。表示が終わった直後に裏で前後1ヶ月分をこっそり
 // dashCacheへ入れておき、実際に‹ ›を押した時にはキャッシュ即表示（→背景で最新化）に乗せる。
 function prefetchAdjacentMonths_(monthKey){
-  [-1,1].forEach(function(n){
-    var p=monthKey.split('-');
-    var d=new Date(Number(p[0]), Number(p[1])-1+n, 1);
-    var k=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);
-    if(dashCache[k]) return; // 既にある月は再取得しない
-    apiAuth('sd_getDashboard', k).then(function(data){ dashCache[k]=data; dashCache[data.month]=data; }).catch(function(){ /* 先読み失敗は無視（実際に押された時に通常経路で取得し直す） */ });
-  });
+  // 2026-10-20 速度改善: 表示の6秒後・前月→翌月の順に1本ずつ（同時に走らせない・タブが裏なら何もしない）。
+  // 従来は表示直後に2本を同時に投げ、サーバー(GAS)の混雑で、いま見ている画面の操作まで遅くしていた。
+  setTimeout(function(){
+    if(document.hidden || state.month!==monthKey) return;
+    var list=[-1,1].map(function(n){
+      var p=monthKey.split('-');
+      var d=new Date(Number(p[0]), Number(p[1])-1+n, 1);
+      return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2);
+    }).filter(function(k){ return !dashCache[k]; });
+    (function next(){
+      var k=list.shift(); if(!k || document.hidden || state.month!==monthKey) return;
+      apiAuth('sd_getDashboard', k).then(function(data){ dashCache[k]=data; dashCache[data.month]=data; dashCacheAt[k]=dashCacheAt[data.month]=Date.now(); })
+        .catch(function(){ /* 先読み失敗は無視（実際に押された時に通常経路で取得し直す） */ })
+        .then(function(){ setTimeout(next, 1500); });
+    })();
+  }, 6000);
 }
 function refreshInBackground(monthKey, key){
   apiAuth('sd_getDashboard', monthKey||null).then(function(data){
-    dashCache[key]=data; dashCache[data.month]=data;
+    dashCache[key]=data; dashCache[data.month]=data; dashCacheAt[key]=dashCacheAt[data.month]=Date.now();
     // 表示中の月がまだ同じなら差し替え
     if(state.month===data.month){ state.data=data; render(); }
   }).catch(function(){ /* 背景更新の失敗は無視 */ });
 }
-function invalidateCache(){ dashCache={}; }
+function invalidateCache(){ dashCache={}; dashCacheAt={}; }
 
 function render(){
   var d=state.data, honbu=isHonbu();
