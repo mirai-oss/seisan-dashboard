@@ -719,9 +719,38 @@ function sd_maybeNotifyComplete_(monthKey) {
   return sd_notifyLarkComplete_(monthKey, targets, total);
 }
 
+/* Slack通知（2026-11-11追加・Lark/Chatworkからの移行）。既存の Edge Function notify-slack を合言葉つきで呼ぶ。
+ * 必要なスクリプトプロパティ（値は画面で直接登録・コードやチャットに書かない）: NOTIFY_SLACK_SECRET / NOTIFY_SLACK_URL
+ * 未設定・失敗でも例外にしない（本処理を止めない）。dedupe_key で同じ通知の二重送信を防ぐ。 */
+function sd_notifySlack_(text, dedupeKey, eventName) {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var secret = props.getProperty('NOTIFY_SLACK_SECRET');
+    var url = props.getProperty('NOTIFY_SLACK_URL');
+    if (!secret || !url) return { sent: false, reason: 'Slack未設定（スクリプトプロパティ NOTIFY_SLACK_SECRET / NOTIFY_SLACK_URL）' };
+    var res = UrlFetchApp.fetch(url, {
+      method: 'post', contentType: 'application/json',
+      headers: { 'x-notify-secret': secret },
+      payload: JSON.stringify({ action: 'send', channel_key: 'hq.keiri_kanshi', text: text, event: eventName || 'seisan', source: 'gas:seisan-dashboard', dedupe_key: dedupeKey, username: 'N-Style 通知Bot' }),
+      muteHttpExceptions: true
+    });
+    var code = res.getResponseCode();
+    if (code >= 200 && code < 300) return { sent: true };
+    return { sent: false, reason: 'Slack送信失敗: HTTP' + code };
+  } catch (e) { return { sent: false, reason: 'Slack送信エラー: ' + String((e && e.message) || e) }; }
+}
+
 function sd_notifyLarkComplete_(monthKey, targets, total) {
   var ext = sd_extConfig_();
+  // 2026-11-11: Slack（#本部-経理監視）にも送る。Lark停止後はSlackだけで「送信済み」とみなす
+  var slackText = '✅【精算完了報告】' + sd_monthLabel_(monthKey) + '分\n全' + targets.length + '店舗の精算書発行・お振込が完了しました。\n\n'
+    + targets.map(function (t) { return '・' + t.name + '：' + sd_yen_(t.transfer); }).join('\n') + '\n\n合計振込額（税込）：' + sd_yen_(total);
+  var slackRes = sd_notifySlack_(slackText, 'seisan_complete:' + monthKey, 'seisan_complete');
   var url = ext['Lark完了報告Webhook'];
+  if (!url && slackRes.sent) {
+    sd_log_('Lark完了報告', '全店舗', monthKey, '全' + targets.length + '店舗完了 合計' + sd_yen_(total) + '（Slackのみ）', '', '', '自動', 'Slack');
+    return { sent: true, slack: true };
+  }
   if (!url) { Logger.log('Lark完了報告Webhookが未設定のため送信をスキップしました'); return { sent: false, reason: 'Webhook未設定' }; }
   var kw = ext['Larkキーワード'] || '';
   var lines = targets.map(function (t) { return '・' + t.name + '：' + sd_yen_(t.transfer); });
@@ -740,11 +769,17 @@ function sd_notifyLarkComplete_(monthKey, targets, total) {
   var okFlag = false;
   try { okFlag = (JSON.parse(bodyText).code === 0) || (JSON.parse(bodyText).StatusCode === 0); } catch (e) { /* 解析不可 */ }
   if (code === 200 && okFlag) {
-    sd_log_('Lark完了報告', '全店舗', monthKey, '全' + targets.length + '店舗完了 合計' + sd_yen_(total), '', '', '自動', '');
-    return { sent: true };
+    sd_log_('Lark完了報告', '全店舗', monthKey, '全' + targets.length + '店舗完了 合計' + sd_yen_(total), '', '', '自動', slackRes.sent ? 'Lark+Slack' : '');
+    return { sent: true, slack: !!slackRes.sent };
   }
   sd_log_('Lark完了報告エラー', '全店舗', monthKey, 'HTTP' + code + ' ' + bodyText, '', '', '自動', '');
   return { sent: false, reason: 'Lark送信失敗: ' + bodyText };
+}
+
+/* エディタから手動でSlack送信をテストする用（#本部-経理監視に1通届く。結果はログに出る） */
+function sd_testSlack() {
+  var r = sd_notifySlack_('🔔 精算ダッシュボードのSlack連携テストです。この通知が届いていれば設定は正常です。', 'seisan_test:' + new Date().getTime(), 'seisan_test');
+  Logger.log(JSON.stringify(r));
 }
 
 /* エディタから手動でLark送信をテストする用（強制送信・二重送信チェックなし） */
@@ -2972,11 +3007,15 @@ function sd_cashAutoTick() {
 }
 
 /* ChatWorkへメッセージ送信（APIトークン・ルームIDは設定_外部連携シートで管理） */
-function sd_notifyChatwork_(message) {
+function sd_notifyChatwork_(message, dedupeKey) {
+  // 2026-11-11: Slack（#本部-経理監視）にも送る（Chatwork記法[info][title]を取り除いて整形）。Chatwork未設定でもSlackは送る
+  var slackText = String(message).replace(/\[info\]\[title\]([\s\S]*?)\[\/title\]/g, '$1\n').replace(/\[\/info\]/g, '').replace(/\[info\]/g, '');
+  var slackRes = sd_notifySlack_(slackText, dedupeKey || '', 'seisan_remind');
   var ext = sd_extConfig_();
   var token = ext['ChatWork APIトークン'];
   var roomId = ext['ChatWorkルームID（振込リマインド用）'];
   if (!token || !roomId) {
+    if (slackRes.sent) return { sent: true, slack: true };
     return { sent: false, reason: 'ChatWork未設定（設定_外部連携シートで「ChatWork APIトークン」「ChatWorkルームID（振込リマインド用）」を設定してください）' };
   }
   var res = UrlFetchApp.fetch('https://api.chatwork.com/v2/rooms/' + roomId + '/messages', {
@@ -3046,7 +3085,7 @@ function sd_remindTick() {
     + headline + '\n\n'
     + lines.join('\n\n')
     + '[/info]';
-  var result = sd_notifyChatwork_(message);
+  var result = sd_notifyChatwork_(message, 'seisan_remind:' + monthKey + ':' + day);
   sd_log_('期限リマインド', '全店舗', monthKey, message, '', '', '自動', result.sent ? 'ChatWork' : ('送信失敗: ' + result.reason));
   return { ok: result.sent, needCount: needCount, reason: result.reason };
 }
