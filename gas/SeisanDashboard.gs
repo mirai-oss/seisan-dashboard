@@ -50,7 +50,7 @@ var SD_KUBUN_OPTIONS = ['売上', '変動費', '固定ロイヤリティ', '変�
  * 呼べる関数はここに明示的に列挙したものだけ（それ以外は拒否）。
  * sd_login 以外は全て第1引数がtoken（内部の sd_auth_ が権限検証する）。 */
 var SD_API_WHITELIST = [
-  'sd_login', 'sd_supaLogin', 'sd_getDashboard', 'sd_addRows', 'sd_updateRow', 'sd_deleteRow', 'sd_setPaid',
+  'sd_login', 'sd_supaLogin', 'sd_googleLogin', 'sd_requestPasswordReset', 'sd_resetPassword', 'sd_getDashboard', 'sd_addRows', 'sd_updateRow', 'sd_deleteRow', 'sd_setPaid',
   'sd_pdfPreview', 'sd_issueAndSend', 'sd_cashPreview', 'sd_cashApply',
   'sd_prepareMonth', 'sd_setupAutoPrep', 'sd_uploadAttachment', 'sd_listAttachments',
   'sd_getPdfB64', 'sd_updateCheckSheet', 'sd_bulkAdd', 'sd_getSettings',
@@ -64,7 +64,7 @@ var SD_API_WHITELIST = [
 
 function sd_apiFnMap_() {
   return {
-    sd_login: sd_login, sd_supaLogin: sd_supaLogin, sd_getDashboard: sd_getDashboard, sd_addRows: sd_addRows,
+    sd_login: sd_login, sd_supaLogin: sd_supaLogin, sd_googleLogin: sd_googleLogin, sd_requestPasswordReset: sd_requestPasswordReset, sd_resetPassword: sd_resetPassword, sd_getDashboard: sd_getDashboard, sd_addRows: sd_addRows,
     sd_updateRow: sd_updateRow, sd_deleteRow: sd_deleteRow, sd_setPaid: sd_setPaid, sd_pdfPreview: sd_pdfPreview,
     sd_issueAndSend: sd_issueAndSend, sd_cashPreview: sd_cashPreview, sd_cashApply: sd_cashApply,
     sd_prepareMonth: sd_prepareMonth, sd_setupAutoPrep: sd_setupAutoPrep,
@@ -1035,11 +1035,19 @@ function sd_sessionGet_(token){
 function sd_sessionDel_(token){ sd_sessionStore_().deleteProperty('sdtok_' + token); sd_sessionSupaDel_(token); }
 
 function sd_login(id, pw) {
+  // 同じIDの連続失敗を抑える（5回失敗で15分止める）。パスワードは記録しない
+  var failKey = 'loginfail_' + sd_sha256hex_(String(id || '').trim().toLowerCase());
+  var fails = Number(CacheService.getScriptCache().get(failKey) || 0);
+  if (fails >= 5) { sd_authLog_('ログイン', id, '制限中'); Utilities.sleep(500); throw new Error('ログインに続けて失敗したため、しばらく時間をおいてからお試しください（パスワードを忘れた場合は「パスワードを忘れた方」から再設定できます）'); }
   var acc = sd_findAccount_(id);
-  if (!acc || !acc.enabled || String(acc.pw) !== String(pw)) {
+  if (!acc || !acc.enabled || !sd_pwMatch_(acc.pw, pw)) {
+    CacheService.getScriptCache().put(failKey, String(fails + 1), 900);
+    sd_authLog_('ログイン', id, '失敗');
     Utilities.sleep(500);
     throw new Error('IDまたはパスワードが違います');
   }
+  CacheService.getScriptCache().remove(failKey);
+  sd_authLog_('ログイン', id, '成功');
   var token = Utilities.getUuid();
   var user = { id: acc.id, name: acc.name, role: acc.role, storesRaw: acc.storesRaw, email: acc.email || '' };
   sd_sessionPut_(token, user);
@@ -1072,6 +1080,108 @@ function sd_supaLogin(stoken) {
   if (!acc.enabled) throw new Error('このアカウントは無効化されています');
   if (acc.role === '委託先') throw new Error('業務委託先アカウントは統合ログインの対象外です。従来のIDとパスワードでログインしてください');
 
+  var token = Utilities.getUuid();
+  var user = { id: acc.id, name: acc.name, role: acc.role, storesRaw: acc.storesRaw, email: acc.email || email };
+  sd_sessionPut_(token, user);
+  return { token: token, name: acc.name, role: acc.role };
+}
+
+/* ---------- パスワードを忘れた場合（2026-11-24追加）----------
+ * 流れ: ①ログインID（またはメール）を入れる → ②権限シートに登録されたメールへ「再設定リンク」（30分・1回だけ有効）を自動送信
+ * → ③リンクから新しいパスワードを決める。本部の手作業は要らない。メール未登録のアカウントは再設定できない（本部がメールを登録する）。
+ * 新しいパスワードは「ハッシュ（元に戻せない文字）」でシートに保存する（従来の平文のパスワードも、そのまま使える）。
+ * 応答は、ID・メールが存在するかどうかに関わらず同じ文言にする（存在の探りを防ぐ）。 */
+var SD_RESET_BASE_URL = 'https://mirai-oss.github.io/seisan-dashboard/';
+/* 認証の記録（いつ・何を・誰が・結果）。パスワード・再設定リンクの合言葉は記録しない。記録に失敗しても本処理は止めない */
+function sd_authLog_(event, who, result) {
+  try {
+    var ss = SpreadsheetApp.getActive(); var sh = ss.getSheetByName('認証ログ_精算ダッシュボード');
+    if (!sh) { sh = ss.insertSheet('認証ログ_精算ダッシュボード'); sh.getRange(1, 1, 1, 4).setValues([['日時', '種類', '対象（ID／メール）', '結果']]); }
+    sh.appendRow([Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd HH:mm:ss'), event, String(who || '').slice(0, 80), result]);
+  } catch (e) { /* 記録失敗は無視 */ }
+}
+function sd_hex_(bytes) { return bytes.map(function (b) { return ('0' + ((b < 0 ? b + 256 : b)).toString(16)).slice(-2); }).join(''); }
+function sd_sha256hex_(text) { return sd_hex_(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text, Utilities.Charset.UTF_8)); }
+function sd_pwHash_(pw) { var salt = Utilities.getUuid().replace(/-/g, '').slice(0, 16); return 'sha256$' + salt + '$' + sd_sha256hex_(salt + '|' + pw); }
+function sd_pwMatch_(stored, pw) {
+  stored = String(stored || '');
+  if (stored.indexOf('sha256$') === 0) { var p = stored.split('$'); return p.length === 3 && sd_sha256hex_(p[1] + '|' + String(pw)) === p[2]; }
+  return stored !== '' && stored === String(pw);
+}
+function sd_findAccountRow_(idOrEmail) {
+  var q = String(idOrEmail || '').trim().toLowerCase();
+  if (!q) return null;
+  var sh = sd_authSheet_(); var lastR = sh.getLastRow();
+  if (lastR < 2) return null;
+  var vals = sh.getRange(2, 1, lastR - 1, 7).getDisplayValues();
+  for (var i = 0; i < vals.length; i++) {
+    var id = String(vals[i][0]).trim().toLowerCase(), em = String(vals[i][6] || '').trim().toLowerCase();
+    if (id === q || (em && em === q)) {
+      return { row: i + 2, sh: sh, id: String(vals[i][0]).trim(), name: String(vals[i][2]).trim(), email: em, enabled: sd_norm_(vals[i][5]).toUpperCase() !== 'FALSE' };
+    }
+  }
+  return null;
+}
+function sd_requestPasswordReset(idOrEmail) {
+  var generic = { ok: true, message: '登録されているメールアドレス宛に、パスワード再設定のメールを送りました（届かない場合は、登録メールが無い可能性があります。本部へご連絡ください）。' };
+  try {
+    var a = sd_findAccountRow_(idOrEmail);
+    if (!a || !a.enabled || !a.email) { sd_authLog_('再設定の依頼', idOrEmail, '対象なし'); Utilities.sleep(1500); return generic; } // 送信に時間がかかる分、反応の速さで見分けられないよう待つ
+    var cache = CacheService.getScriptCache();
+    var rk = 'pwreset_cnt_' + sd_sha256hex_(a.id);
+    var cnt = Number(cache.get(rk) || 0);
+    if (cnt >= 3) { sd_authLog_('再設定の依頼', a.id, '回数制限'); Utilities.sleep(1500); return generic; } // 1時間に3回まで
+    cache.put(rk, String(cnt + 1), 3600);
+    var token = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+    var tokHash = sd_sha256hex_(token);
+    var oldHash = cache.get('pwreset_cur_' + sd_sha256hex_(a.id)); if (oldHash) cache.remove('pwreset_' + oldHash); // 新しいリンクを出したら古いリンクは無効
+    cache.put('pwreset_' + tokHash, a.id, 1800); cache.put('pwreset_cur_' + sd_sha256hex_(a.id), tokHash, 1800);
+    var link = SD_RESET_BASE_URL + '?reset=' + token;
+    var body = (a.name || a.id) + ' 様\n\n精算ダッシュボードのパスワード再設定の依頼を受け付けました。\n下のリンクを開いて、新しいパスワードを決めてください（30分以内・1回だけ有効）。\n\n' + link
+      + '\n\n心当たりがない場合は、このメールは無視してください（パスワードは変わりません）。\n\nN-Style 精算ダッシュボード';
+    GmailApp.sendEmail(a.email, '【N-Style】精算ダッシュボード パスワード再設定のご案内', body, { name: 'N-Style 精算ダッシュボード', noReply: true });
+    sd_authLog_('再設定の依頼', a.id, 'メール送信');
+  } catch (e) { Logger.log('パスワード再設定メールの送信に失敗: ' + e); }
+  return generic;
+}
+function sd_resetPassword(token, newPw) {
+  token = String(token || '').trim(); newPw = String(newPw || '');
+  if (!token) throw new Error('再設定のリンクが正しくありません');
+  if (newPw.length < 8) throw new Error('パスワードは8文字以上にしてください');
+  var cache = CacheService.getScriptCache();
+  var key = 'pwreset_' + sd_sha256hex_(token);
+  var id = cache.get(key);
+  if (!id) { sd_authLog_('再設定の実行', '（不明）', '失敗（期限切れ・使用済み）'); throw new Error('再設定のリンクの有効期限が切れています。もう一度「パスワードを忘れた方」からやり直してください'); }
+  var a = sd_findAccountRow_(id);
+  if (!a || !a.enabled) throw new Error('このアカウントは使えません');
+  a.sh.getRange(a.row, 2).setNumberFormat('@').setValue(sd_pwHash_(newPw));
+  cache.remove(key); cache.remove('pwreset_cur_' + sd_sha256hex_(id)); // 1回だけ有効
+  sd_authLog_('再設定の実行', id, '成功');
+  return { ok: true };
+}
+
+/* Googleでログイン（2026-11-24追加）。画面でGoogleにログインして得た「IDトークン」を受け取り、Google本体に確認して、
+ * ①このアプリ用のクライアントIDで発行されたもの ②メールが確認済み ③「権限_精算ダッシュボード」のG列（メール）に
+ * 登録されている・有効なアカウント、の3つがそろったときだけセッションを発行する（登録の無いGoogleアカウントは入れない）。
+ * パスワードはこのGASを通らない。委託先・本部・マスターのどれでも使える。Googleを使わない委託先は従来のID・パスワードのまま。
+ * SD_GOOGLE_CLIENT_ID が空の間は、Googleログインは拒否される。 */
+var SD_GOOGLE_CLIENT_ID = '';
+function sd_googleLogin(idToken) {
+  if (!SD_GOOGLE_CLIENT_ID) throw new Error('Googleログインはまだ設定されていません');
+  if (!idToken) throw new Error('Googleのログイン情報がありません');
+  var res = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken), { muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) throw new Error('Googleの認証が無効です。もう一度ログインしてください');
+  var j = {};
+  try { j = JSON.parse(res.getContentText()); } catch (e) { /* 下で弾く */ }
+  if (String(j.aud || '') !== SD_GOOGLE_CLIENT_ID) throw new Error('このGoogleログインは、この画面用ではありません');
+  if (['accounts.google.com', 'https://accounts.google.com'].indexOf(String(j.iss || '')) < 0) throw new Error('Googleの認証元が正しくありません');
+  if (String(j.email_verified) !== 'true') throw new Error('Googleアカウントのメールが確認されていません');
+  var email = String(j.email || '').trim().toLowerCase();
+  if (!email) throw new Error('Googleアカウントのメールアドレスを取得できませんでした');
+  var acc = sd_findAccountByEmail_(email);
+  if (!acc) { sd_authLog_('Googleログイン', email, '失敗（未登録）'); throw new Error('このGoogleアカウント（' + email + '）は登録されていません。本部に、メールアドレスの登録を依頼してください'); }
+  if (!acc.enabled) { sd_authLog_('Googleログイン', email, '失敗（無効）'); throw new Error('このアカウントは無効化されています'); }
+  sd_authLog_('Googleログイン', email, '成功');
   var token = Utilities.getUuid();
   var user = { id: acc.id, name: acc.name, role: acc.role, storesRaw: acc.storesRaw, email: acc.email || email };
   sd_sessionPut_(token, user);

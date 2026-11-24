@@ -175,6 +175,25 @@
   <label>パスワード</label>
   <input id="login-pw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
   <button onclick="doLogin()">ログイン</button>
+  <p style="margin:10px 0 0"><a href="#" onclick="forgotToggle();return false" style="color:var(--muted);font-size:13px">パスワードを忘れた方はこちら</a></p>
+  <div id="forgot-form" style="display:none;margin-top:10px;background:#f7f7f5;border-radius:8px;padding:10px 12px">
+    <label>ログインID（またはメールアドレス）</label>
+    <input id="forgot-id" autocomplete="username" onkeydown="if(event.key==='Enter')doForgot()">
+    <button onclick="doForgot()">再設定のメールを送る</button>
+    <p class="muted" style="margin-top:6px">登録されているメールアドレス宛に、再設定のリンクを自動でお送りします。</p>
+  </div>
+  <div id="reset-form" style="display:none;margin-top:10px;background:#fff4e5;border-radius:8px;padding:10px 12px">
+    <b>新しいパスワードを決めてください</b>
+    <label>新しいパスワード（8文字以上）</label>
+    <input id="reset-pw1" type="password" autocomplete="new-password">
+    <label>もう一度</label>
+    <input id="reset-pw2" type="password" autocomplete="new-password" onkeydown="if(event.key==='Enter')doReset()">
+    <button onclick="doReset()">パスワードを変更する</button>
+  </div>
+  <div id="google-box" style="display:none;margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
+    <div id="google-btn"></div>
+    <p class="muted" style="margin-top:6px">※ 本部に登録したメールアドレスのGoogleアカウントだけ入れます。</p>
+  </div>
   <div id="sso-box" style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
     <button id="sso-open" onclick="ssoToggle()" style="background:transparent;color:var(--muted);border:1px dashed var(--line)">🐔 統合アカウント（ポータル/日報）でログイン</button>
     <div id="sso-form" style="display:none">
@@ -652,6 +671,58 @@ function doSsoLogin(){
     if(m.indexOf('許可されていない呼び出し')>-1) m='サーバー側の更新（GAS再デプロイ）がまだのため、統合ログインはもう少し先になります';
     err.textContent=m;
   });
+}
+
+/* ===== パスワードを忘れた場合（2026-11-24追加）===== */
+function forgotToggle(){ var f=document.getElementById('forgot-form'); f.style.display=f.style.display==='none'?'':'none'; if(f.style.display!=='none') document.getElementById('forgot-id').focus(); }
+function doForgot(){
+  var id=document.getElementById('forgot-id').value.trim(); var err=document.getElementById('login-err');
+  if(!id){ err.textContent='ログインIDまたはメールアドレスを入れてください'; return; }
+  loading(true,'送信中…');
+  api('sd_requestPasswordReset', id).then(function(res){ loading(false); err.style.color='#15803d'; err.textContent=(res&&res.message)||'送信しました'; })
+    .catch(function(e){ loading(false); err.textContent=String(e.message||e); });
+}
+var RESET_TOKEN_=(new URLSearchParams(location.search)).get('reset')||'';
+function showResetForm_(){
+  if(!RESET_TOKEN_) return false;
+  document.getElementById('reset-form').style.display=''; return true;
+}
+function doReset(){
+  var p1=document.getElementById('reset-pw1').value, p2=document.getElementById('reset-pw2').value; var err=document.getElementById('login-err');
+  err.style.color='';
+  if(p1.length<8){ err.textContent='パスワードは8文字以上にしてください'; return; }
+  if(p1!==p2){ err.textContent='確認用のパスワードが一致しません'; return; }
+  loading(true,'変更中…');
+  api('sd_resetPassword', RESET_TOKEN_, p1).then(function(){
+    loading(false); RESET_TOKEN_=''; history.replaceState(null,'',location.pathname);
+    document.getElementById('reset-form').style.display='none';
+    err.style.color='#15803d'; err.textContent='パスワードを変更しました。新しいパスワードでログインしてください。';
+  }).catch(function(e){ loading(false); err.textContent=String(e.message||e); });
+}
+
+/* ===== Googleでログイン（2026-11-24追加）=====
+ * 公開してよい「クライアントID」を入れると、ログイン画面にGoogleのボタンが出る。空のあいだは出ない。
+ * 受け取ったIDトークンをGAS（sd_googleLogin）へ渡し、権限シートのメールと照合して入る */
+var GOOGLE_CLIENT_ID='';
+function googleCred_(resp){
+  var err=document.getElementById('login-err'); err.textContent='';
+  loading(true,'Google認証中…');
+  api('sd_googleLogin', resp.credential).then(function(res){
+    state.token=res.token; localStorage.setItem('sd_token', res.token); loading(false); enterApp_();
+  }).catch(function(e){ loading(false); err.textContent=String(e.message||e); });
+}
+function initGoogleLogin_(){
+  if(!GOOGLE_CLIENT_ID) return;
+  var box=document.getElementById('google-box'); if(!box) return;
+  var s=document.createElement('script'); s.src='https://accounts.google.com/gsi/client'; s.async=true; s.defer=true;
+  s.onload=function(){
+    try{
+      google.accounts.id.initialize({client_id:GOOGLE_CLIENT_ID, callback:googleCred_, auto_select:false});
+      google.accounts.id.renderButton(document.getElementById('google-btn'),{theme:'outline',size:'large',text:'signin_with',locale:'ja',width:300});
+      box.style.display='';
+    }catch(e){}
+  };
+  document.head.appendChild(s);
 }
 
 /* ===== 表示 ===== */
@@ -1971,6 +2042,8 @@ if(state.token){
   enterApp_();
 } else {
   showLogin('');
+  showResetForm_();
+  initGoogleLogin_();
   trySilentPortalLogin();   // ポータルでログイン済みならそのまま入る
 }
 </script>
