@@ -1175,6 +1175,7 @@ function sd_googleLogin(idToken) {
   try { j = JSON.parse(res.getContentText()); } catch (e) { /* 下で弾く */ }
   if (String(j.aud || '') !== SD_GOOGLE_CLIENT_ID) throw new Error('このGoogleログインは、この画面用ではありません');
   if (['accounts.google.com', 'https://accounts.google.com'].indexOf(String(j.iss || '')) < 0) throw new Error('Googleの認証元が正しくありません');
+  if (!(Number(j.exp) * 1000 > new Date().getTime())) throw new Error('Googleのログインの有効期限が切れています。もう一度ログインしてください'); // 署名と期限はtokeninfo（Google側）が確認済み。念のためこちらでも期限を見る
   if (String(j.email_verified) !== 'true') throw new Error('Googleアカウントのメールが確認されていません');
   var email = String(j.email || '').trim().toLowerCase();
   if (!email) throw new Error('Googleアカウントのメールアドレスを取得できませんでした');
