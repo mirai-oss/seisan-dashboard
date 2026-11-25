@@ -1165,7 +1165,7 @@ function sd_resetPassword(token, newPw) {
  * 登録されている・有効なアカウント、の3つがそろったときだけセッションを発行する（登録の無いGoogleアカウントは入れない）。
  * パスワードはこのGASを通らない。委託先・本部・マスターのどれでも使える。Googleを使わない委託先は従来のID・パスワードのまま。
  * SD_GOOGLE_CLIENT_ID が空の間は、Googleログインは拒否される。 */
-var SD_GOOGLE_CLIENT_ID = '';
+var SD_GOOGLE_CLIENT_ID = '776072969993-jn4ujnt4srevj76krlmmasvl6bqe4rfo.apps.googleusercontent.com';
 function sd_googleLogin(idToken) {
   if (!SD_GOOGLE_CLIENT_ID) throw new Error('Googleログインはまだ設定されていません');
   if (!idToken) throw new Error('Googleのログイン情報がありません');
