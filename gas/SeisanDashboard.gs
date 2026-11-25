@@ -50,7 +50,7 @@ var SD_KUBUN_OPTIONS = ['売上', '変動費', '固定ロイヤリティ', '変�
  * 呼べる関数はここに明示的に列挙したものだけ（それ以外は拒否）。
  * sd_login 以外は全て第1引数がtoken（内部の sd_auth_ が権限検証する）。 */
 var SD_API_WHITELIST = [
-  'sd_login', 'sd_supaLogin', 'sd_googleLogin', 'sd_requestPasswordReset', 'sd_resetPassword', 'sd_getDashboard', 'sd_addRows', 'sd_updateRow', 'sd_deleteRow', 'sd_setPaid',
+  'sd_login', 'sd_supaLogin', 'sd_googleLogin', 'sd_requestPasswordReset', 'sd_resetPassword', 'sd_requestAccess', 'sd_listAccessRequests', 'sd_approveAccess', 'sd_rejectAccess', 'sd_getDashboard', 'sd_addRows', 'sd_updateRow', 'sd_deleteRow', 'sd_setPaid',
   'sd_pdfPreview', 'sd_issueAndSend', 'sd_cashPreview', 'sd_cashApply',
   'sd_prepareMonth', 'sd_setupAutoPrep', 'sd_uploadAttachment', 'sd_listAttachments',
   'sd_getPdfB64', 'sd_updateCheckSheet', 'sd_bulkAdd', 'sd_getSettings',
@@ -64,7 +64,7 @@ var SD_API_WHITELIST = [
 
 function sd_apiFnMap_() {
   return {
-    sd_login: sd_login, sd_supaLogin: sd_supaLogin, sd_googleLogin: sd_googleLogin, sd_requestPasswordReset: sd_requestPasswordReset, sd_resetPassword: sd_resetPassword, sd_getDashboard: sd_getDashboard, sd_addRows: sd_addRows,
+    sd_login: sd_login, sd_supaLogin: sd_supaLogin, sd_googleLogin: sd_googleLogin, sd_requestPasswordReset: sd_requestPasswordReset, sd_resetPassword: sd_resetPassword, sd_requestAccess: sd_requestAccess, sd_listAccessRequests: sd_listAccessRequests, sd_approveAccess: sd_approveAccess, sd_rejectAccess: sd_rejectAccess, sd_getDashboard: sd_getDashboard, sd_addRows: sd_addRows,
     sd_updateRow: sd_updateRow, sd_deleteRow: sd_deleteRow, sd_setPaid: sd_setPaid, sd_pdfPreview: sd_pdfPreview,
     sd_issueAndSend: sd_issueAndSend, sd_cashPreview: sd_cashPreview, sd_cashApply: sd_cashApply,
     sd_prepareMonth: sd_prepareMonth, sd_setupAutoPrep: sd_setupAutoPrep,
@@ -1166,7 +1166,7 @@ function sd_resetPassword(token, newPw) {
  * パスワードはこのGASを通らない。委託先・本部・マスターのどれでも使える。Googleを使わない委託先は従来のID・パスワードのまま。
  * SD_GOOGLE_CLIENT_ID が空の間は、Googleログインは拒否される。 */
 var SD_GOOGLE_CLIENT_ID = '776072969993-jn4ujnt4srevj76krlmmasvl6bqe4rfo.apps.googleusercontent.com';
-function sd_googleLogin(idToken) {
+function sd_googleVerify_(idToken) {
   if (!SD_GOOGLE_CLIENT_ID) throw new Error('Googleログインはまだ設定されていません');
   if (!idToken) throw new Error('Googleのログイン情報がありません');
   var res = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(idToken), { muteHttpExceptions: true });
@@ -1179,6 +1179,10 @@ function sd_googleLogin(idToken) {
   if (String(j.email_verified) !== 'true') throw new Error('Googleアカウントのメールが確認されていません');
   var email = String(j.email || '').trim().toLowerCase();
   if (!email) throw new Error('Googleアカウントのメールアドレスを取得できませんでした');
+  return email;
+}
+function sd_googleLogin(idToken) {
+  var email = sd_googleVerify_(idToken);
   var acc = sd_findAccountByEmail_(email);
   if (!acc) { sd_authLog_('Googleログイン', email, '失敗（未登録）'); throw new Error('このGoogleアカウント（' + email + '）は登録されていません。本部に、メールアドレスの登録を依頼してください'); }
   if (!acc.enabled) { sd_authLog_('Googleログイン', email, '失敗（無効）'); throw new Error('このアカウントは無効化されています'); }
@@ -1187,6 +1191,82 @@ function sd_googleLogin(idToken) {
   var user = { id: acc.id, name: acc.name, role: acc.role, storesRaw: acc.storesRaw, email: acc.email || email };
   sd_sessionPut_(token, user);
   return { token: token, name: acc.name, role: acc.role };
+}
+
+/* ---------- Googleで利用申請 → 本部が承認（2026-11-25追加）----------
+ * 委託先の担当者を増やすための仕組み。担当者がGoogleでログインして「氏名・会社名」を申請すると「アカウント申請」シートに溜まり、
+ * 本部へSlackで知らせる。本部が設定タブで、どの委託先として登録するか選んで「承認」を押すと、アカウントが自動で作られる。
+ * 申請しただけでは何も見えない（権限シートに入るのは承認後）。担当店舗は、申請者ではなく本部が選んだ既存の委託先アカウントからコピーする。 */
+var SD_REQ_SHEET = 'アカウント申請_精算ダッシュボード';
+var SD_REQ_HEAD = ['申請ID', '申請日時', 'メール', '氏名', '会社名（申請者入力）', '状態', '処理者', '処理日時', '作成したID', '備考'];
+function sd_reqSheet_() {
+  var ss = SpreadsheetApp.getActive(); var sh = ss.getSheetByName(SD_REQ_SHEET);
+  if (!sh) { sh = ss.insertSheet(SD_REQ_SHEET); sh.getRange(1, 1, 1, SD_REQ_HEAD.length).setValues([SD_REQ_HEAD]); SpreadsheetApp.flush(); }
+  return sh;
+}
+function sd_reqRows_() {
+  var sh = sd_reqSheet_(); var lastR = sh.getLastRow(); if (lastR < 2) return [];
+  return sh.getRange(2, 1, lastR - 1, SD_REQ_HEAD.length).getDisplayValues().map(function (v, i) {
+    return { row: i + 2, id: v[0], at: v[1], email: String(v[2]).trim().toLowerCase(), name: v[3], company: v[4], status: v[5], by: v[6], doneAt: v[7], createdId: v[8], note: v[9] };
+  });
+}
+function sd_now_() { return Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd HH:mm:ss'); }
+function sd_requestAccess(idToken, name, company) {
+  var email = sd_googleVerify_(idToken); // 本人確認はGoogle（サーバー側）で行う
+  name = String(name || '').trim(); company = String(company || '').trim();
+  if (!name || name.length > 40) throw new Error('氏名を入力してください（40文字以内）');
+  if (!company || company.length > 60) throw new Error('会社名を入力してください（60文字以内）');
+  if (sd_findAccountByEmail_(email)) throw new Error('このGoogleアカウントは、すでに登録されています。「Googleでログイン」から入ってください');
+  var cache = CacheService.getScriptCache(); var rk = 'accreq_cnt_' + sd_sha256hex_(email);
+  var cnt = Number(cache.get(rk) || 0);
+  if (cnt >= 3) { sd_authLog_('利用申請', email, '回数制限'); throw new Error('申請の回数が多すぎます。しばらくしてからお試しください'); }
+  var rows = sd_reqRows_();
+  if (rows.some(function (r) { return r.email === email && r.status === '申請中'; })) throw new Error('すでに申請中です。本部の承認をお待ちください');
+  cache.put(rk, String(cnt + 1), 86400);
+  var id = 'REQ-' + Utilities.formatDate(new Date(), SD_TZ, 'yyyyMMdd-HHmmss') + '-' + Utilities.getUuid().slice(0, 4);
+  sd_reqSheet_().appendRow([id, sd_now_(), email, name, company, '申請中', '', '', '', '']);
+  sd_authLog_('利用申請', email, '受付');
+  try { sd_notifySlack_('🙋【精算ダッシュボード アカウント申請】' + name + ' 様（' + company + '）から利用申請がありました。\n精算ダッシュボードの「設定」タブ →「アカウント申請」で、内容を確認して承認してください。', 'accreq:' + id, 'seisan_access_request'); } catch (e) { /* 通知失敗は無視 */ }
+  try { GmailApp.sendEmail(email, '【N-Style】精算ダッシュボード 利用申請を受け付けました', name + ' 様\n\n精算ダッシュボードの利用申請を受け付けました。本部が内容を確認します。承認されたら、あらためてメールでお知らせします（承認までは、ログインできません）。\n\nN-Style 精算ダッシュボード', { name: 'N-Style 精算ダッシュボード', noReply: true }); } catch (e) { /* 無視 */ }
+  return { ok: true, message: '申請を受け付けました。本部が確認します。承認されたら、メールでお知らせします。' };
+}
+function sd_listAccessRequests(token) {
+  sd_auth_(token, true);
+  return sd_reqRows_().reverse().slice(0, 100);
+}
+function sd_newAccountId_(baseId) {
+  var sh = sd_authSheet_(); var lastR = sh.getLastRow(); var used = {};
+  if (lastR > 1) sh.getRange(2, 1, lastR - 1, 1).getDisplayValues().forEach(function (r) { used[String(r[0]).trim().toLowerCase()] = true; });
+  for (var n = 2; n < 100; n++) { var cand = baseId + '-' + (n < 10 ? '0' + n : n); if (!used[cand.toLowerCase()]) return cand; }
+  throw new Error('ログインIDを作れませんでした');
+}
+function sd_approveAccess(token, reqId, baseId) {
+  var user = sd_auth_(token, true);
+  var req = sd_reqRows_().filter(function (r) { return r.id === String(reqId || ''); })[0];
+  if (!req) throw new Error('申請が見つかりません');
+  if (req.status !== '申請中') throw new Error('この申請は、すでに処理済みです（' + req.status + '）');
+  if (String(user.email || '').toLowerCase() === req.email) throw new Error('自分の申請は、自分で承認できません');
+  if (sd_findAccountByEmail_(req.email)) throw new Error('このメールは、すでにアカウントに登録されています');
+  var base = sd_findAccount_(String(baseId || ''));
+  if (!base || base.role !== '委託先') throw new Error('どの委託先として登録するか（既存の委託先アカウント）を選んでください');
+  var newId = sd_newAccountId_(base.id);
+  var displayName = req.name + '（' + base.name + '）';
+  sd_authSheet_().appendRow([newId, '', displayName, '委託先', base.storesRaw, 'TRUE', req.email]);
+  var sh = sd_reqSheet_(); sh.getRange(req.row, 6, 1, 5).setValues([['承認', user.id || user.name || '', sd_now_(), newId, '委託先: ' + base.id + ' から担当店舗をコピー']]);
+  sd_authLog_('利用申請の承認', req.email, '承認（' + newId + '）');
+  try { GmailApp.sendEmail(req.email, '【N-Style】精算ダッシュボード 利用申請が承認されました', req.name + ' 様\n\n利用申請が承認されました。下のページを開いて「Googleでログイン」を押してください（申請したGoogleアカウントで入れます）。\n\n' + SD_RESET_BASE_URL + '\n\nN-Style 精算ダッシュボード', { name: 'N-Style 精算ダッシュボード', noReply: true }); } catch (e) { /* 無視 */ }
+  return { ok: true, id: newId };
+}
+function sd_rejectAccess(token, reqId, reason) {
+  var user = sd_auth_(token, true);
+  var req = sd_reqRows_().filter(function (r) { return r.id === String(reqId || ''); })[0];
+  if (!req) throw new Error('申請が見つかりません');
+  if (req.status !== '申請中') throw new Error('この申請は、すでに処理済みです（' + req.status + '）');
+  var why = String(reason || '').trim().slice(0, 100);
+  sd_reqSheet_().getRange(req.row, 6, 1, 5).setValues([['却下', user.id || user.name || '', sd_now_(), '', why]]);
+  sd_authLog_('利用申請の却下', req.email, '却下');
+  try { GmailApp.sendEmail(req.email, '【N-Style】精算ダッシュボード 利用申請について', req.name + ' 様\n\n今回の利用申請は、承認されませんでした。心当たりがない場合や、ご不明な点は、本部へご連絡ください。\n\nN-Style 精算ダッシュボード', { name: 'N-Style 精算ダッシュボード', noReply: true }); } catch (e) { /* 無視 */ }
+  return { ok: true };
 }
 
 function sd_auth_(token, needHonbu) {
@@ -3509,7 +3589,7 @@ function sd_getSettings(token) {
   if (lastR > 1) {
     accSh.getRange(2, 1, lastR - 1, 7).getDisplayValues().forEach(function (r) {
       if (String(r[0]).trim()) accounts.push({
-        id: String(r[0]).trim(), pw: String(r[1]), name: String(r[2]).trim(),
+        id: String(r[0]).trim(), pw: '', hasPw: !!String(r[1] || '').trim(), name: String(r[2]).trim(),
         role: sd_normRole_(r[3]),
         stores: String(r[4]).trim(), enabled: sd_norm_(r[5]).toUpperCase() !== 'FALSE',
         email: String(r[6] || '').trim().toLowerCase()
@@ -3541,10 +3621,16 @@ function sd_getSettings(token) {
   };
 }
 
+// 本部が入れた初期パスワードもハッシュで保存する。空欄なら、今のパスワードをそのまま残す（Google・再設定でだけ入るアカウントは空のまま）
+function sd_pwForSave_(pw, current) {
+  pw = String(pw || '');
+  if (!pw) return String(current || '');
+  if (pw.indexOf('sha256$') === 0) return pw;
+  return sd_pwHash_(pw);
+}
 function sd_saveAccount(token, acc) {
   var user = sd_auth_(token, true);
   if (!acc || !String(acc.id || '').trim()) throw new Error('ログインIDを入力してください');
-  if (!String(acc.pw || '').trim()) throw new Error('パスワードを入力してください');
   var newRole = sd_normRole_(acc.role);
   // マスター権限の付与・既存マスターの編集はマスターのみ
   var existing = sd_findAccount_(String(acc.id).trim());
@@ -3559,10 +3645,12 @@ function sd_saveAccount(token, acc) {
       if (String(ids[i][0]).trim() === String(acc.id).trim()) { row = i + 2; break; }
     }
   }
-  // 委託先は統合アカウントの対象外なのでメールは保存しない
-  var email = newRole === '委託先' ? '' : String(acc.email || '').trim().toLowerCase();
+  // メールは全ての権限で保存する（Googleログイン・パスワード再設定に使う）。委託先のメールが消えないようにする
+  var email = String(acc.email || '').trim().toLowerCase();
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('メールアドレスの形が正しくありません');
+  if (email) { var dup = sd_findAccountByEmail_(email); if (dup && dup.id.toLowerCase() !== String(acc.id).trim().toLowerCase()) throw new Error('このメールは、別のアカウントで使われています'); }
   var rec = [
-    String(acc.id).trim(), String(acc.pw), String(acc.name || acc.id).trim(),
+    String(acc.id).trim(), sd_pwForSave_(acc.pw, row ? sh.getRange(row, 2).getDisplayValue() : ''), String(acc.name || acc.id).trim(),
     newRole,
     String(acc.stores || '').trim() || (newRole !== '委託先' ? '全店' : ''),
     acc.enabled === false ? 'FALSE' : 'TRUE',

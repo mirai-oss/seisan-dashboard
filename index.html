@@ -193,6 +193,19 @@
   <div id="google-box" style="display:none;margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
     <div id="google-btn"></div>
     <p class="muted" style="margin-top:6px">※ 本部に登録したメールアドレスのGoogleアカウントだけ入れます。</p>
+    <p style="margin:8px 0 0"><a href="#" onclick="reqToggle();return false" style="color:var(--muted);font-size:13px">担当者の追加を申請する（Googleで利用申請）</a></p>
+  </div>
+  <div id="req-box" style="display:none;margin-top:14px;background:#f7f7f5;border-radius:8px;padding:10px 12px">
+    <b>Googleで利用申請</b>
+    <p class="muted" style="margin:4px 0 8px">申請したあと、本部が確認して承認すると入れるようになります（承認までは何も見えません）。</p>
+    <div id="req-step1"><div id="google-req-btn"></div></div>
+    <div id="req-step2" style="display:none">
+      <p class="muted" id="req-who"></p>
+      <label>氏名</label><input id="req-name" maxlength="40">
+      <label>会社名</label><input id="req-company" maxlength="60" placeholder="例: 株式会社LiveGate">
+      <button onclick="doRequestAccess()">申請する</button>
+    </div>
+    <p style="margin:8px 0 0"><a href="#" onclick="reqToggle();return false" style="color:var(--muted);font-size:13px">やめる</a></p>
   </div>
   <div id="sso-box" style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
     <button id="sso-open" onclick="ssoToggle()" style="background:transparent;color:var(--muted);border:1px dashed var(--line)">🐔 統合アカウント（ポータル/日報）でログイン</button>
@@ -334,6 +347,12 @@
           <div class="settle-setting-row"><strong>発行モーダルの送信の既定</strong><select id="ops-autosend-mode" onchange="saveOpsSettings()"><option value="manual">送信チェックを毎回選ぶ</option><option value="auto">送信チェック済みにしておく</option></select></div>
           <p class="muted" id="ops-master-note" style="margin-top:8px;display:none">※ この設定の変更にはマスターアカウントが必要です</p>
         </div>
+      </div>
+
+      <div class="settle-setting" style="margin-top:12px" id="accreq-card">
+        <h3 style="margin:0 0 6px">🙋 アカウント申請（Googleで申請 → ここで承認）</h3>
+        <p class="muted" style="margin:0 0 8px">委託先の担当者が、ログイン画面の「Googleで利用申請」から申請すると、ここに並びます。どの委託先として登録するかを選んで「承認」を押すと、アカウントが作られます（担当店舗は選んだ委託先と同じになります）。</p>
+        <div class="settle-tablewrap"><table class="settle-table" id="accreq-table"></table></div>
       </div>
 
       <div class="settle-setting" style="margin-top:12px">
@@ -704,8 +723,27 @@ function doReset(){
  * 公開してよい「クライアントID」を入れると、ログイン画面にGoogleのボタンが出る。空のあいだは出ない。
  * 受け取ったIDトークンをGAS（sd_googleLogin）へ渡し、権限シートのメールと照合して入る */
 var GOOGLE_CLIENT_ID='776072969993-jn4ujnt4srevj76krlmmasvl6bqe4rfo.apps.googleusercontent.com';
+var REQ_MODE_=false, REQ_CRED_='';
+function reqToggle(){
+  REQ_MODE_=!REQ_MODE_; REQ_CRED_='';
+  document.getElementById('req-box').style.display=REQ_MODE_?'':'none';
+  document.getElementById('google-box').style.display=REQ_MODE_?'none':'';
+  document.getElementById('req-step1').style.display=''; document.getElementById('req-step2').style.display='none';
+  document.getElementById('login-err').textContent='';
+  if(REQ_MODE_){ try{ google.accounts.id.renderButton(document.getElementById('google-req-btn'),{theme:'outline',size:'large',text:'continue_with',locale:'ja',width:300}); }catch(e){} }
+}
+function doRequestAccess(){
+  var name=document.getElementById('req-name').value.trim(), company=document.getElementById('req-company').value.trim(); var err=document.getElementById('login-err'); err.style.color='';
+  if(!name||!company){ err.textContent='氏名と会社名を入れてください'; return; }
+  loading(true,'申請中…');
+  api('sd_requestAccess', REQ_CRED_, name, company).then(function(res){
+    loading(false); err.style.color='#15803d'; err.textContent=(res&&res.message)||'申請しました';
+    document.getElementById('req-step2').style.display='none'; REQ_CRED_='';
+  }).catch(function(e){ loading(false); err.textContent=String(e.message||e); });
+}
 function googleCred_(resp){
   var err=document.getElementById('login-err'); err.textContent='';
+  if(REQ_MODE_){ REQ_CRED_=resp.credential; document.getElementById('req-step1').style.display='none'; document.getElementById('req-step2').style.display=''; document.getElementById('req-who').textContent='Googleで本人確認ができました。氏名と会社名を入れて申請してください。'; return; }
   loading(true,'Google認証中…');
   api('sd_googleLogin', resp.credential).then(function(res){
     state.token=res.token; localStorage.setItem('sd_token', res.token); loading(false); enterApp_();
@@ -1901,7 +1939,7 @@ var settingsCache=null;
 function loadSettings(){
   loading(true,'設定を読み込み中…');
   apiAuth('sd_getSettings').then(function(res){
-    settingsCache=res; loading(false); renderSettings();
+    settingsCache=res; loading(false); renderSettings(); loadAccessRequests();
   }).catch(function(e){ loading(false); toast('設定の読み込みエラー: '+(e.message||e)); });
 }
 function renderSettings(){
@@ -1957,6 +1995,41 @@ function renderSettings(){
         return '<tr><td>'+esc(st.name)+'</td><td>'+esc(st.client)+'</td><td>'+esc(st.rate)+'</td><td>'+(st.hasDb?'✅':'<span class="settle-chip amber">未検出</span>')+'</td></tr>';
       }).join('');
 }
+/* ===== アカウント申請（Googleで申請 → 本部が承認）===== */
+var accReqCache=[];
+function loadAccessRequests(){
+  var t=document.getElementById('accreq-table'); if(!t) return;
+  apiAuth('sd_listAccessRequests').then(function(rows){ accReqCache=rows||[]; renderAccessRequests(); })
+    .catch(function(e){ t.innerHTML='<tr><td class="muted">申請の読み込みエラー: '+esc(e.message||e)+'</td></tr>'; });
+}
+function renderAccessRequests(){
+  var t=document.getElementById('accreq-table'); if(!t) return;
+  if(!accReqCache.length){ t.innerHTML='<tr><td class="muted">申請はありません</td></tr>'; return; }
+  var bases=(settingsCache&&settingsCache.accounts||[]).filter(function(a){return a.role==='委託先'&&a.enabled;});
+  t.innerHTML='<tr><th>申請日時</th><th>氏名</th><th>会社名（申請者入力）</th><th>メール</th><th>状態</th><th>処理</th></tr>'
+    + accReqCache.map(function(r,i){
+        var act='';
+        if(r.status==='申請中'){
+          act='<select id="accreq-base-'+i+'"><option value="">（どの委託先？）</option>'+bases.map(function(b){ return '<option value="'+esc(b.id)+'">'+esc(b.name)+'（'+esc(b.id)+'）</option>'; }).join('')+'</select> '
+            +'<button class="btn primary sm" onclick="approveAccess('+i+')">承認</button> <button class="btn sm" onclick="rejectAccess('+i+')">却下</button>';
+        } else { act='<span class="muted">'+esc(r.createdId?('作成: '+r.createdId):(r.note||''))+'</span>'; }
+        return '<tr><td>'+esc(r.at)+'</td><td>'+esc(r.name)+'</td><td>'+esc(r.company)+'</td><td>'+esc(r.email)+'</td><td>'+esc(r.status)+'</td><td>'+act+'</td></tr>';
+      }).join('');
+}
+function approveAccess(i){
+  var r=accReqCache[i]; var base=(document.getElementById('accreq-base-'+i)||{}).value;
+  if(!base){ toast('どの委託先として登録するか選んでください'); return; }
+  if(!confirm(r.name+' 様（'+r.email+'）を、委託先「'+base+'」の担当者として登録します。よろしいですか？')) return;
+  loading(true,'承認中…');
+  apiAuth('sd_approveAccess', r.id, base).then(function(res){ loading(false); toast('✅ 承認しました（ログインID: '+res.id+'）。申請者にメールでお知らせしました'); loadSettings(); })
+    .catch(function(e){ loading(false); toast('承認エラー: '+(e.message||e)); });
+}
+function rejectAccess(i){
+  var r=accReqCache[i]; var why=prompt(r.name+' 様の申請を却下します。理由（社内用メモ・任意）:',''); if(why===null) return;
+  loading(true,'却下中…');
+  apiAuth('sd_rejectAccess', r.id, why).then(function(){ loading(false); toast('却下しました'); loadAccessRequests(); })
+    .catch(function(e){ loading(false); toast('却下エラー: '+(e.message||e)); });
+}
 function saveStoreRateInline(input, storeName){
   var v=input.value.trim();
   apiAuth('sd_saveStoreRate', storeName, v).then(function(){
@@ -1978,21 +2051,21 @@ function saveOpsSettings(){
   }).catch(function(e){ toast('保存エラー: '+(e.message||e)); loadSettings(); });
 }
 function openAccountModal(idx){
-  var a = (idx!=null && settingsCache) ? settingsCache.accounts[idx] : {id:'',pw:'',name:'',role:'委託先',stores:'',enabled:true};
+  var a = (idx!=null && settingsCache) ? settingsCache.accounts[idx] : {id:'',pw:'',hasPw:false,name:'',role:'委託先',stores:'',enabled:true};
   var isNew = idx==null;
   var storeChecks = settingsCache.stores.map(function(st){
     var checked = a.stores && a.stores.split(/[,、，]/).map(function(x){return x.trim();}).indexOf(st.name)>-1;
     return '<label style="display:inline-flex;align-items:center;gap:4px;margin:2px 8px 2px 0;font-size:13px"><input type="checkbox" class="acc-store" value="'+esc(st.name)+'" '+(checked?'checked':'')+'> '+esc(st.name)+'</label>';
   }).join('');
   var body='<div class="settle-entry-top"><div><label>ログインID</label><input id="acc-id" value="'+esc(a.id)+'" '+(isNew?'':'readonly')+'></div>'
-    +'<div><label>パスワード</label><input id="acc-pw" value="'+esc(a.pw)+'"></div>'
+    +'<div><label>パスワード（空欄＝今のまま。Google・再設定だけで使う人は空でOK）</label><input id="acc-pw" type="password" autocomplete="new-password" value="" placeholder="'+(a.hasPw?'設定済み（変更するときだけ入力）':'未設定')+'"></div>'
     +'<div><label>表示名</label><input id="acc-name" value="'+esc(a.name)+'"></div></div>'
     +'<div class="settle-entry-top" style="grid-template-columns:1fr 1fr"><div><label>権限</label><select id="acc-role" onchange="document.getElementById(\'acc-stores-wrap\').style.display=this.value===\'委託先\'?\'\':\'none\'">'
     +(isMaster()?'<option'+(a.role==='マスター'?' selected':'')+'>マスター</option>':'')
     +'<option'+(a.role==='本部'?' selected':'')+'>本部</option><option'+(a.role==='委託先'?' selected':'')+'>委託先</option></select></div>'
     +'<div><label>有効</label><select id="acc-enabled"><option value="TRUE"'+(a.enabled?' selected':'')+'>有効</option><option value="FALSE"'+(!a.enabled?' selected':'')+'>無効</option></select></div></div>'
-    +'<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>統合アカウントのメール（ポータル／日報と共通ログイン。委託先は対象外）</label>'
-    +'<input id="acc-email" type="email" value="'+esc(a.email||'')+'" placeholder="例: taro@ns0314.com（空欄＝統合ログイン不可）"></div></div>'
+    +'<div class="settle-entry-top" style="grid-template-columns:1fr"><div><label>メールアドレス（Googleログイン・パスワード再設定・統合ログインに使います。委託先も登録してください）</label>'
+    +'<input id="acc-email" type="email" value="'+esc(a.email||'')+'" placeholder="例: taro@example.com（空欄＝Googleログイン・再設定は使えません）"></div></div>'
     +'<div id="acc-stores-wrap" style="'+(a.role!=='委託先'?'display:none':'')+'"><div class="muted" style="margin-bottom:4px">担当店舗（委託先が閲覧できる店舗）</div>'+storeChecks+'</div>';
   openModal(isNew?'＋ アカウントを追加':'アカウントを編集: '+esc(a.id), body,
     '<button class="btn primary" onclick="saveAccount()">保存</button><button class="btn" onclick="closeModal()">閉じる</button>');
@@ -2010,7 +2083,6 @@ function saveAccount(){
     email:(document.getElementById('acc-email')||{value:''}).value.trim().toLowerCase()
   };
   if(!acc.id){ toast('ログインIDを入れてください'); return; }
-  if(!acc.pw){ toast('パスワードを入れてください'); return; }
   loading(true,'保存中…');
   apiAuth('sd_saveAccount',acc).then(function(res){
     loading(false); closeModal();
