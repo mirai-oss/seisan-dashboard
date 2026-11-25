@@ -202,7 +202,7 @@
     <div id="req-step2" style="display:none">
       <p class="muted" id="req-who"></p>
       <label>氏名</label><input id="req-name" maxlength="40">
-      <label>会社名</label><input id="req-company" maxlength="60" placeholder="例: 株式会社LiveGate">
+      <label>会社名（一覧から選んでください）</label><select id="req-company"><option value="">（読み込み中…）</option></select>
       <button onclick="doRequestAccess()">申請する</button>
     </div>
     <p style="margin:8px 0 0"><a href="#" onclick="reqToggle();return false" style="color:var(--muted);font-size:13px">やめる</a></p>
@@ -733,8 +733,8 @@ function reqToggle(){
   if(REQ_MODE_){ try{ google.accounts.id.renderButton(document.getElementById('google-req-btn'),{theme:'outline',size:'large',text:'continue_with',locale:'ja',width:300}); }catch(e){} }
 }
 function doRequestAccess(){
-  var name=document.getElementById('req-name').value.trim(), company=document.getElementById('req-company').value.trim(); var err=document.getElementById('login-err'); err.style.color='';
-  if(!name||!company){ err.textContent='氏名と会社名を入れてください'; return; }
+  var name=document.getElementById('req-name').value.trim(), company=document.getElementById('req-company').value; var err=document.getElementById('login-err'); err.style.color='';
+  if(!name||!company){ err.textContent='氏名を入れて、会社名を一覧から選んでください'; return; }
   loading(true,'申請中…');
   api('sd_requestAccess', REQ_CRED_, name, company).then(function(res){
     loading(false); err.style.color='#15803d'; err.textContent=(res&&res.message)||'申請しました';
@@ -743,7 +743,14 @@ function doRequestAccess(){
 }
 function googleCred_(resp){
   var err=document.getElementById('login-err'); err.textContent='';
-  if(REQ_MODE_){ REQ_CRED_=resp.credential; document.getElementById('req-step1').style.display='none'; document.getElementById('req-step2').style.display=''; document.getElementById('req-who').textContent='Googleで本人確認ができました。氏名と会社名を入れて申請してください。'; return; }
+  if(REQ_MODE_){
+    REQ_CRED_=resp.credential; document.getElementById('req-step1').style.display='none'; document.getElementById('req-step2').style.display='';
+    document.getElementById('req-who').textContent='Googleで本人確認ができました。氏名を入れて、会社名を一覧から選んでください。';
+    var sel=document.getElementById('req-company');
+    api('sd_requestAccessOptions', REQ_CRED_).then(function(list){
+      sel.innerHTML='<option value="">（会社を選んでください）</option>'+(list||[]).map(function(o){ return '<option value="'+esc(o.key)+'">'+esc(o.name)+'</option>'; }).join('');
+    }).catch(function(e){ err.textContent=String(e.message||e); });
+    return; }
   loading(true,'Google認証中…');
   api('sd_googleLogin', resp.credential).then(function(res){
     state.token=res.token; localStorage.setItem('sd_token', res.token); loading(false); enterApp_();
@@ -2006,11 +2013,11 @@ function renderAccessRequests(){
   var t=document.getElementById('accreq-table'); if(!t) return;
   if(!accReqCache.length){ t.innerHTML='<tr><td class="muted">申請はありません</td></tr>'; return; }
   var bases=(settingsCache&&settingsCache.accounts||[]).filter(function(a){return a.role==='委託先'&&a.enabled;});
-  t.innerHTML='<tr><th>申請日時</th><th>氏名</th><th>会社名（申請者入力）</th><th>メール</th><th>状態</th><th>処理</th></tr>'
+  t.innerHTML='<tr><th>申請日時</th><th>氏名</th><th>会社名（申請者が選択）</th><th>メール</th><th>状態</th><th>処理</th></tr>'
     + accReqCache.map(function(r,i){
         var act='';
         if(r.status==='申請中'){
-          act='<select id="accreq-base-'+i+'"><option value="">（どの委託先？）</option>'+bases.map(function(b){ return '<option value="'+esc(b.id)+'">'+esc(b.name)+'（'+esc(b.id)+'）</option>'; }).join('')+'</select> '
+          act='<select id="accreq-base-'+i+'"><option value="">（どの委託先？）</option>'+bases.map(function(b){ return '<option value="'+esc(b.id)+'"'+(b.id===r.baseId?' selected':'')+'>'+esc(b.name)+'（'+esc(b.id)+'）</option>'; }).join('')+'</select> '
             +'<button class="btn primary sm" onclick="approveAccess('+i+')">承認</button> <button class="btn sm" onclick="rejectAccess('+i+')">却下</button>';
         } else { act='<span class="muted">'+esc(r.createdId?('作成: '+r.createdId):(r.note||''))+'</span>'; }
         return '<tr><td>'+esc(r.at)+'</td><td>'+esc(r.name)+'</td><td>'+esc(r.company)+'</td><td>'+esc(r.email)+'</td><td>'+esc(r.status)+'</td><td>'+act+'</td></tr>';

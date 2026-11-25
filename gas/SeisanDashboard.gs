@@ -50,7 +50,7 @@ var SD_KUBUN_OPTIONS = ['売上', '変動費', '固定ロイヤリティ', '変�
  * 呼べる関数はここに明示的に列挙したものだけ（それ以外は拒否）。
  * sd_login 以外は全て第1引数がtoken（内部の sd_auth_ が権限検証する）。 */
 var SD_API_WHITELIST = [
-  'sd_login', 'sd_supaLogin', 'sd_googleLogin', 'sd_requestPasswordReset', 'sd_resetPassword', 'sd_requestAccess', 'sd_listAccessRequests', 'sd_approveAccess', 'sd_rejectAccess', 'sd_getDashboard', 'sd_addRows', 'sd_updateRow', 'sd_deleteRow', 'sd_setPaid',
+  'sd_login', 'sd_supaLogin', 'sd_googleLogin', 'sd_requestPasswordReset', 'sd_resetPassword', 'sd_requestAccess', 'sd_requestAccessOptions', 'sd_listAccessRequests', 'sd_approveAccess', 'sd_rejectAccess', 'sd_getDashboard', 'sd_addRows', 'sd_updateRow', 'sd_deleteRow', 'sd_setPaid',
   'sd_pdfPreview', 'sd_issueAndSend', 'sd_cashPreview', 'sd_cashApply',
   'sd_prepareMonth', 'sd_setupAutoPrep', 'sd_uploadAttachment', 'sd_listAttachments',
   'sd_getPdfB64', 'sd_updateCheckSheet', 'sd_bulkAdd', 'sd_getSettings',
@@ -64,7 +64,7 @@ var SD_API_WHITELIST = [
 
 function sd_apiFnMap_() {
   return {
-    sd_login: sd_login, sd_supaLogin: sd_supaLogin, sd_googleLogin: sd_googleLogin, sd_requestPasswordReset: sd_requestPasswordReset, sd_resetPassword: sd_resetPassword, sd_requestAccess: sd_requestAccess, sd_listAccessRequests: sd_listAccessRequests, sd_approveAccess: sd_approveAccess, sd_rejectAccess: sd_rejectAccess, sd_getDashboard: sd_getDashboard, sd_addRows: sd_addRows,
+    sd_login: sd_login, sd_supaLogin: sd_supaLogin, sd_googleLogin: sd_googleLogin, sd_requestPasswordReset: sd_requestPasswordReset, sd_resetPassword: sd_resetPassword, sd_requestAccess: sd_requestAccess, sd_requestAccessOptions: sd_requestAccessOptions, sd_listAccessRequests: sd_listAccessRequests, sd_approveAccess: sd_approveAccess, sd_rejectAccess: sd_rejectAccess, sd_getDashboard: sd_getDashboard, sd_addRows: sd_addRows,
     sd_updateRow: sd_updateRow, sd_deleteRow: sd_deleteRow, sd_setPaid: sd_setPaid, sd_pdfPreview: sd_pdfPreview,
     sd_issueAndSend: sd_issueAndSend, sd_cashPreview: sd_cashPreview, sd_cashApply: sd_cashApply,
     sd_prepareMonth: sd_prepareMonth, sd_setupAutoPrep: sd_setupAutoPrep,
@@ -1198,24 +1198,43 @@ function sd_googleLogin(idToken) {
  * 本部へSlackで知らせる。本部が設定タブで、どの委託先として登録するか選んで「承認」を押すと、アカウントが自動で作られる。
  * 申請しただけでは何も見えない（権限シートに入るのは承認後）。担当店舗は、申請者ではなく本部が選んだ既存の委託先アカウントからコピーする。 */
 var SD_REQ_SHEET = 'アカウント申請_精算ダッシュボード';
-var SD_REQ_HEAD = ['申請ID', '申請日時', 'メール', '氏名', '会社名（申請者入力）', '状態', '処理者', '処理日時', '作成したID', '備考'];
+var SD_REQ_HEAD = ['申請ID', '申請日時', 'メール', '氏名', '会社名（申請者が選択）', '状態', '処理者', '処理日時', '作成したID', '備考', '希望の委託先ID'];
 function sd_reqSheet_() {
   var ss = SpreadsheetApp.getActive(); var sh = ss.getSheetByName(SD_REQ_SHEET);
   if (!sh) { sh = ss.insertSheet(SD_REQ_SHEET); sh.getRange(1, 1, 1, SD_REQ_HEAD.length).setValues([SD_REQ_HEAD]); SpreadsheetApp.flush(); }
+  else if (sh.getLastColumn && sh.getLastColumn() < SD_REQ_HEAD.length) { sh.getRange(1, SD_REQ_HEAD.length).setValue(SD_REQ_HEAD[SD_REQ_HEAD.length - 1]); } // 古いシートに列を足す
   return sh;
 }
 function sd_reqRows_() {
   var sh = sd_reqSheet_(); var lastR = sh.getLastRow(); if (lastR < 2) return [];
   return sh.getRange(2, 1, lastR - 1, SD_REQ_HEAD.length).getDisplayValues().map(function (v, i) {
-    return { row: i + 2, id: v[0], at: v[1], email: String(v[2]).trim().toLowerCase(), name: v[3], company: v[4], status: v[5], by: v[6], doneAt: v[7], createdId: v[8], note: v[9] };
+    return { row: i + 2, id: v[0], at: v[1], email: String(v[2]).trim().toLowerCase(), name: v[3], company: v[4], status: v[5], by: v[6], doneAt: v[7], createdId: v[8], note: v[9], baseId: String(v[10] || '') };
   });
 }
 function sd_now_() { return Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd HH:mm:ss'); }
-function sd_requestAccess(idToken, name, company) {
+/* 申請画面の「会社名」プルダウン用。本人確認（Googleのトークン）ができた人にだけ、委託先の会社名の一覧を返す。
+ * ログインIDは返さず、照らし合わせ用の短い印（key）だけ返す。承認で作られたアカウント（ID末尾が -数字）は会社として数えない */
+function sd_companyOptions_() {
+  var sh = sd_authSheet_(); var lastR = sh.getLastRow(); var out = [];
+  if (lastR < 2) return out;
+  sh.getRange(2, 1, lastR - 1, 7).getDisplayValues().forEach(function (r) {
+    var id = String(r[0]).trim();
+    if (!id || sd_normRole_(r[3]) !== '委託先' || sd_norm_(r[5]).toUpperCase() === 'FALSE' || /-\d{2}$/.test(id)) return;
+    out.push({ key: sd_sha256hex_('company|' + id).slice(0, 12), id: id, name: String(r[2]).trim() || id });
+  });
+  return out;
+}
+function sd_requestAccessOptions(idToken) {
+  sd_googleVerify_(idToken);
+  return sd_companyOptions_().map(function (o) { return { key: o.key, name: o.name }; });
+}
+function sd_requestAccess(idToken, name, companyKey) {
   var email = sd_googleVerify_(idToken); // 本人確認はGoogle（サーバー側）で行う
-  name = String(name || '').trim(); company = String(company || '').trim();
+  name = String(name || '').trim();
   if (!name || name.length > 40) throw new Error('氏名を入力してください（40文字以内）');
-  if (!company || company.length > 60) throw new Error('会社名を入力してください（60文字以内）');
+  var opt = sd_companyOptions_().filter(function (o) { return o.key === String(companyKey || ''); })[0];
+  if (!opt) throw new Error('会社名を、一覧から選んでください');
+  var company = opt.name;
   if (sd_findAccountByEmail_(email)) throw new Error('このGoogleアカウントは、すでに登録されています。「Googleでログイン」から入ってください');
   var cache = CacheService.getScriptCache(); var rk = 'accreq_cnt_' + sd_sha256hex_(email);
   var cnt = Number(cache.get(rk) || 0);
@@ -1224,7 +1243,7 @@ function sd_requestAccess(idToken, name, company) {
   if (rows.some(function (r) { return r.email === email && r.status === '申請中'; })) throw new Error('すでに申請中です。本部の承認をお待ちください');
   cache.put(rk, String(cnt + 1), 86400);
   var id = 'REQ-' + Utilities.formatDate(new Date(), SD_TZ, 'yyyyMMdd-HHmmss') + '-' + Utilities.getUuid().slice(0, 4);
-  sd_reqSheet_().appendRow([id, sd_now_(), email, name, company, '申請中', '', '', '', '']);
+  sd_reqSheet_().appendRow([id, sd_now_(), email, name, company, '申請中', '', '', '', '', opt.id]);
   sd_authLog_('利用申請', email, '受付');
   try { sd_notifySlack_('🙋【精算ダッシュボード アカウント申請】' + name + ' 様（' + company + '）から利用申請がありました。\n精算ダッシュボードの「設定」タブ →「アカウント申請」で、内容を確認して承認してください。', 'accreq:' + id, 'seisan_access_request'); } catch (e) { /* 通知失敗は無視 */ }
   try { GmailApp.sendEmail(email, '【N-Style】精算ダッシュボード 利用申請を受け付けました', name + ' 様\n\n精算ダッシュボードの利用申請を受け付けました。本部が内容を確認します。承認されたら、あらためてメールでお知らせします（承認までは、ログインできません）。\n\nN-Style 精算ダッシュボード', { name: 'N-Style 精算ダッシュボード', noReply: true }); } catch (e) { /* 無視 */ }
