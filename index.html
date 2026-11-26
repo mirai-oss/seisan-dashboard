@@ -540,8 +540,7 @@ function apiOnce_(fn){
 var API_RETRY_DELAYS_MS = [1000,2000,4000,8000];
 /* 試験表示では、新しい窓口が対応した操作は Supabase へ送る（切り替えまで、書き込みは窓口が断る）。
  * まだ対応していない操作は、読むだけのものを除いて止める（試験画面から、今のデータを書き換えない） */
-var DB_FNS_=/^sd_(login|googleLogin|supaLogin|requestPasswordReset|resetPassword|requestAccessOptions|requestAccess|addRows|updateRow|deleteRow|bulkAdd|setPaid|listAccessRequests|approveAccess|rejectAccess|saveAccount|getSettings|getOpsSettings|saveTerms|deleteTerms|saveRecurring|saveMail|saveCorp|saveOpsSettings|listAttachments|uploadAttachment|deleteAttachment|getPdfB64)$/;
-var DB_PASS_FNS_=/^sd_(pdfPreview)$/;
+var DB_FNS_=/^sd_(login|googleLogin|supaLogin|requestPasswordReset|resetPassword|requestAccessOptions|requestAccess|addRows|updateRow|deleteRow|bulkAdd|setPaid|listAccessRequests|approveAccess|rejectAccess|saveAccount|getSettings|getOpsSettings|saveTerms|deleteTerms|saveRecurring|saveMail|saveCorp|saveOpsSettings|listAttachments|uploadAttachment|deleteAttachment|getPdfB64|pdfPreview|issueAndSend)$/;
 function dbApi_(fn, args){
   return fetch(DB_API_URL, { method:'POST', headers:{ 'Content-Type':'application/json', apikey:PERF_LOG_ANON_KEY }, body:JSON.stringify({ fn:fn, args:args }) })
     .then(function(r){ return r.json(); })
@@ -550,12 +549,9 @@ function dbApi_(fn, args){
 function api(fn){
   if(DB_MODE){
     if(DB_FNS_.test(fn)) return dbApi_(fn, Array.prototype.slice.call(arguments,1));
-    // 添付などの読むだけの操作は、まだ今の仕組みから読む（いつもの画面のログインを使う）
-    var legacy=localStorage.getItem('sd_token');
     var dbMsg='この操作は、試験表示ではまだ使えません。いつもの画面（URLに ?source=db が無いもの）で行ってください';
-    if(!DB_PASS_FNS_.test(fn) || !legacy){ toast('🧪 '+dbMsg); return Promise.reject(new Error(dbMsg)); }
-    return apiOnce_.apply(null, [fn, legacy].concat(Array.prototype.slice.call(arguments,2)))
-      .catch(function(){ throw new Error(dbMsg); }); // いつもの画面のログイン切れで、試験表示のログインを切らない
+    toast('🧪 '+dbMsg);
+    return Promise.reject(new Error(dbMsg));
   }
   var args = Array.prototype.slice.call(arguments,0);
   function attempt(n){

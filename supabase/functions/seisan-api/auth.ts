@@ -3,7 +3,7 @@
 
 export type Account = { login_id: string; pw_hash: string; name: string; role: string; stores_raw: string; enabled: boolean; email: string };
 export type AccessRequest = { id: string; at?: string; at_text?: string; email: string; name: string; company: string; status: string; handled_by?: string; handled_at?: string; created_id?: string; note?: string; base_id?: string };
-export type User = { id: string; name: string; role: string; storesRaw: string; email: string };
+export type User = { id: string; name: string; role: string; storesRaw: string; email: string; token?: string };
 
 export interface Store {
   mode(): Promise<string>;                               // 'copy'（切り替え前） か 'live'

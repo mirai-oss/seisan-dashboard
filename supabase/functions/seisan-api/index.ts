@@ -7,6 +7,7 @@ import { buildDashboard } from "./dashboard.ts";
 import * as auth from "./auth.ts";
 import { buildSettings } from "./settings.ts";
 import * as files from "./files.ts";
+import * as issue from "./issue.ts";
 import { supaStore } from "./store.ts";
 
 const ORIGIN = "https://mirai-oss.github.io";
@@ -28,10 +29,23 @@ async function notifySlack(text: string, dedupeKey: string) {
   });
 }
 
+// PDF作成とメール送信の係（今のGAS）。合言葉が未設定のうちは使えない
+const WORKER_URL = "https://script.google.com/macros/s/AKfycbzwYN9uSEtcJHSKSVQCoQOrllhO7G6gR-E4dvP-V4o_VdGXr9VQx2mbYYPNyNEFSQCiKg/exec";
+async function worker(job: Record<string, unknown>) {
+  const secret = Deno.env.get("SEISAN_WORKER_SECRET");
+  if (!secret) throw new auth.AppError("PDFとメールの準備がまだです（合言葉が未設定です）");
+  const res = await fetch(WORKER_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ fn: "sd_apiWorker", args: [secret, job] }) });
+  const out: any = await res.json().catch(() => null);
+  if (!out?.ok || !out.result?.ok) { console.error("worker failed", String(job.type)); throw new auth.AppError("PDF・メールの処理に失敗しました" + (out?.result?.error ? "：" + out.result.error : "")); }
+  return out.result;
+}
+const sendMail = async (to: string, subject: string, body: string) => { await worker({ type: "mail", to, subject, body, senderName: "N-Style 精算ダッシュボード", noReply: true }); };
+
 const deps: auth.Deps = {
   store: supaStore(db), fetch, googleClientId: GOOGLE_CLIENT_ID,
   portal: { url: URL_, key: Deno.env.get("SUPABASE_ANON_KEY")! },
-  notify: notifySlack, // メール送信(sendMail)は移行の段階3-5で用意する
+  notify: notifySlack,
+  sendMail: Deno.env.get("SEISAN_WORKER_SECRET") ? sendMail : undefined,
 };
 
 // ログインしていなくても呼べるもの
@@ -46,6 +60,7 @@ const PUBLIC: Record<string, (a: any[]) => Promise<unknown>> = {
 };
 
 class DbError extends auth.AppError {}
+const actorOf = ({ token: _t, ...u }: auth.User) => u; // データベースの記録にトークンを残さない
 const bucket = () => db.storage.from("settle-files");
 const monthLabel = (m: string) => `${Number(m.slice(0, 4))}年${Number(m.slice(5, 7))}月`;
 async function rpc(name: string, args: Record<string, unknown>) {
@@ -57,15 +72,80 @@ async function rpc(name: string, args: Record<string, unknown>) {
   throw new Error("database");
 }
 
+async function issueData(token: string) {
+  const r: any = await rpc("settle_issue_data", { p_token: token });
+  if (!r) throw new auth.AppError("AUTH");
+  return { ...r.data, thisMonth: jst(new Date()).slice(0, 7) };
+}
+// 管理システムへ発行を知らせる（請求書の下書き用。失敗しても発行は止めない）
+async function notifyPortal(store: string, month: string, s: any, resend: boolean, fileName: string, b64: string) {
+  const token = Deno.env.get("PL_SYNC_TOKEN");
+  if (!token) return { ok: false, error: "PL_SYNC_TOKEN未設定" };
+  try {
+    const res = await fetch(URL_ + "/functions/v1/invoice-auto-sales", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "seisan_issued", token, store, month, transfer: s.transfer, transfer_ex: s.transferEx, tax: s.tax, resend, pdf: { file_name: fileName, base64: b64 } }) });
+    return { ok: res.ok };
+  } catch { return { ok: false }; }
+}
+
 // ログインが必要なもの（a は、トークンより後ろの引数）
 const AUTHED: Record<string, (u: auth.User, a: any[]) => Promise<unknown>> = {
-  sd_addRows: (u, a) => rpc("settle_add_rows", { actor: u, p: a[0] }),
-  sd_updateRow: (u, a) => rpc("settle_update_row", { actor: u, p: a[0] }),
-  sd_deleteRow: (u, a) => rpc("settle_delete_row", { actor: u, p: a[0] }),
-  sd_bulkAdd: (u, a) => rpc("settle_bulk_add", { actor: u, p: a[0] }),
+  sd_addRows: (u, a) => rpc("settle_add_rows", { actor: actorOf(u), p: a[0] }),
+  sd_updateRow: (u, a) => rpc("settle_update_row", { actor: actorOf(u), p: a[0] }),
+  sd_deleteRow: (u, a) => rpc("settle_delete_row", { actor: actorOf(u), p: a[0] }),
+  sd_bulkAdd: (u, a) => rpc("settle_bulk_add", { actor: actorOf(u), p: a[0] }),
   sd_setPaid: async (u, a) => { // a = [委託先, 月, 振込済みか, メールも送るか, 金額]
-    const r: any = await rpc("settle_set_paid", { actor: u, p_client: a[0], p_month: a[1], p_done: !!a[2], p_amount: a[4] ?? null });
-    return { ...r, mailed: false, mailedStores: [] };
+    const r: any = await rpc("settle_set_paid", { actor: actorOf(u), p_client: a[0], p_month: a[1], p_done: !!a[2], p_amount: a[4] ?? null });
+    if (!r.done) return { ...r, mailed: false, mailedStores: [] };
+    const warnings: string[] = [];
+    await worker({ type: "dispatchPl", month: a[1] }).catch(() => warnings.push("PL同期を起動できませんでした"));
+    const mailedStores: string[] = [];
+    if (a[3]) {
+      const d: any = await issueData(u.token!);
+      for (const name of r.members as string[]) {
+        const st = d.stores.find((s: any) => s.name === name);
+        const m = st && issue.paidMail(st, d.settings, a[1], d, u);
+        if (!m) continue;
+        try {
+          await worker({ type: "mail", ...m });
+          await rpc("settle_record_issue", { actor: actorOf(u), p: { action: "振込完了メール", store: name, month: a[1], fileName: m.subject, to: m.to } });
+          mailedStores.push(name);
+        } catch { warnings.push(name + ": 振込完了メールを送れませんでした"); }
+      }
+    }
+    return { ...r, mailed: mailedStores.length > 0, mailedStores, warnings };
+  },
+  sd_issueAndSend: async (u, a) => { // a = [店舗, 月, メールも送るか]
+    const [store, month, doMail] = [String(a[0] ?? ""), String(a[1] ?? ""), !!a[2]];
+    if (u.role !== "本部" && u.role !== "マスター") throw new auth.AppError("この操作は本部アカウントのみ実行できます");
+    if ((await deps.store.mode()) !== "live") throw new auth.AppError("切り替え前のため、ここでは発行できません。いつもの画面で行ってください");
+    const d: any = await issueData(u.token!);
+    const model = issue.statementModel(d, u, store, month);
+    if (!model) throw new auth.AppError("店舗が見つかりません: " + store);
+    const st = d.stores.find((s: any) => s.name === store);
+    const resend = doMail && d.logs.some((l: any) => l.store === store && l.month === month && l.action === "メール送信");
+    if (doMail && !String(st.mail?.to ?? "").trim()) throw new auth.AppError("「" + store + "」の宛先(To)がありません");
+    const pdf = await worker({ type: "pdf", model });
+    const bytes = files.decodeB64(pdf.b64)!;
+    const fileName = issue.pdfName(store, month, resend);
+    const path = `files/${month}/${crypto.randomUUID()}.pdf`;
+    if ((await bucket().upload(path, bytes, { contentType: "application/pdf" })).error) throw new Error("storage");
+    const ins = await db.from("settle_attachments").insert({ store_key: st.store_key, month, file_name: fileName, storage_path: path, mime: "application/pdf", size_bytes: bytes.length, uploaded_by: u.name }).select("id").single();
+    if (ins.error) throw new Error("database");
+    const result: any = { ok: true, fileName, fileId: String(ins.data.id), url: (await bucket().createSignedUrl(path, 3600)).data?.signedUrl ?? "", mailed: false, resend };
+    if (doMail) {
+      const all = await db.from("settle_attachments").select("file_name,size_bytes,storage_path").eq("store_key", st.store_key).eq("month", month).is("deleted_at", null);
+      if (all.error) throw new Error("database");
+      const picked = issue.pickAttachments(all.data.map((f: any) => ({ name: f.file_name, size: Number(f.size_bytes ?? 0), path: f.storage_path })), bytes.length);
+      const signed = picked.send.length ? await bucket().createSignedUrls(picked.send.map((f) => f.path), 900) : { data: [] as any[], error: null };
+      if (signed.error) throw new Error("storage");
+      const mail = issue.statementMail(st.mail, d.settings, month, resend, fileName, picked.names);
+      const sent = await worker({ type: "mail", ...mail, pdf: { name: fileName, b64: pdf.b64 }, attachments: picked.send.map((f, i) => ({ name: f.name, url: signed.data![i].signedUrl })) });
+      Object.assign(result, { mailed: true, to: mail.to, attachCount: sent.attachCount });
+      result.portal = await notifyPortal(store, month, model.s, resend, fileName, pdf.b64);
+    }
+    await rpc("settle_record_issue", { actor: actorOf(u), p: { action: doMail ? "メール送信" : "PDF保存", store, month, fileName, fileId: result.fileId, to: result.to ?? "" } });
+    return result;
   },
   sd_listAccessRequests: (u) => auth.listAccessRequests(deps, u),
   sd_approveAccess: (u, a) => auth.approveAccess(deps, u, a[0], a[1]),
@@ -73,7 +153,7 @@ const AUTHED: Record<string, (u: auth.User, a: any[]) => Promise<unknown>> = {
   sd_saveAccount: (u, a) => auth.saveAccount(deps, u, a[0]),
   sd_uploadAttachment: async (u, a) => { // a = [{ store, month, kind, fileName, mimeType, b64, revised }]
     const p: any = a[0] ?? {};
-    const t: any = await rpc("settle_file_target", { actor: u, p_store: p.store, p_month: p.month });
+    const t: any = await rpc("settle_file_target", { actor: actorOf(u), p_store: p.store, p_month: p.month });
     const bytes = files.decodeB64(p.b64);
     if (!bytes) throw new auth.AppError("ファイルが読めないか、大きすぎます（25MBまで）");
     const n = files.attachmentName(p.kind, p.month, p.store, p.fileName, !!p.revised, t.names);
@@ -88,13 +168,13 @@ const AUTHED: Record<string, (u: auth.User, a: any[]) => Promise<unknown>> = {
     const signed = await bucket().createSignedUrl(path, 3600);
     return { ok: true, name: n.name, url: signed.data?.signedUrl ?? "", folder: monthLabel(p.month) + "／" + p.store };
   },
-  sd_deleteAttachment: (u, a) => rpc("settle_file_delete", { actor: u, p_store: a[0], p_month: a[1], p_id: String(a[2] ?? "") }),
-  sd_saveTerms: (u, a) => rpc("settle_save_terms", { actor: u, p: a[0] }),
-  sd_deleteTerms: (u, a) => rpc("settle_delete_terms", { actor: u, p: a[0] }),
-  sd_saveRecurring: (u, a) => rpc("settle_save_recurring", { actor: u, p: a[0] }),
-  sd_saveMail: (u, a) => rpc("settle_save_mail", { actor: u, p: a[0] }),
-  sd_saveCorp: (u, a) => rpc("settle_save_corp", { actor: u, p: a[0] }),
-  sd_saveOpsSettings: (u, a) => rpc("settle_save_ops", { actor: u, p: a[0] }),
+  sd_deleteAttachment: (u, a) => rpc("settle_file_delete", { actor: actorOf(u), p_store: a[0], p_month: a[1], p_id: String(a[2] ?? "") }),
+  sd_saveTerms: (u, a) => rpc("settle_save_terms", { actor: actorOf(u), p: a[0] }),
+  sd_deleteTerms: (u, a) => rpc("settle_delete_terms", { actor: actorOf(u), p: a[0] }),
+  sd_saveRecurring: (u, a) => rpc("settle_save_recurring", { actor: actorOf(u), p: a[0] }),
+  sd_saveMail: (u, a) => rpc("settle_save_mail", { actor: actorOf(u), p: a[0] }),
+  sd_saveCorp: (u, a) => rpc("settle_save_corp", { actor: actorOf(u), p: a[0] }),
+  sd_saveOpsSettings: (u, a) => rpc("settle_save_ops", { actor: actorOf(u), p: a[0] }),
 };
 
 Deno.serve(async (req: Request) => {
@@ -106,7 +186,7 @@ Deno.serve(async (req: Request) => {
   const t0 = Date.now();
   try {
     if (Object.hasOwn(PUBLIC, fn)) return json({ ok: true, result: await PUBLIC[fn](args) });
-    const READS = ["sd_getDashboard", "sd_getSettings", "sd_getOpsSettings", "sd_listAttachments", "sd_getPdfB64"];
+    const READS = ["sd_getDashboard", "sd_getSettings", "sd_getOpsSettings", "sd_listAttachments", "sd_getPdfB64", "sd_pdfPreview"];
     if (!READS.includes(fn) && !Object.hasOwn(AUTHED, fn)) return json({ ok: false, error: "この機能は、移行の次の段階で使えるようになります" });
     const [token, ...rest] = args;
     if (typeof token !== "string" || token.length < 32) return json({ ok: false, error: "AUTH" }, 401);
@@ -141,6 +221,14 @@ Deno.serve(async (req: Request) => {
       const url = new Map(signed.data.map((s: any) => [s.path, s.signedUrl]));
       return json({ ok: true, result: list.map((f: any) => ({ id: f.id, name: f.name, date: f.date, url: url.get(f.path) ?? "" })) });
     }
+    if (fn === "sd_pdfPreview") { // [店舗, 月]。読むだけなので、切り替え前でも使える
+      const d: any = await issueData(token);
+      const u: any = await rpc("settle_whoami", { p_token: token });
+      const model = issue.statementModel(d, u, String(rest[0] ?? ""), String(rest[1] ?? ""));
+      if (!model) return json({ ok: false, error: "この店舗の閲覧権限がありません" });
+      const pdf = await worker({ type: "pdf", model });
+      return json({ ok: true, result: { fileName: issue.pdfName(model.store, model.monthKey, false), b64: pdf.b64 } });
+    }
     if (fn === "sd_getPdfB64") {
       const f: any = await rpc("settle_file_get", { p_token: token, p_file: String(rest[0] ?? "") });
       if (!f) return json({ ok: false, error: "AUTH" }, 401);
@@ -151,7 +239,7 @@ Deno.serve(async (req: Request) => {
 
     const user: any = await rpc("settle_whoami", { p_token: token });
     if (!user) return json({ ok: false, error: "AUTH" }, 401);
-    return json({ ok: true, result: await AUTHED[fn](user, rest) });
+    return json({ ok: true, result: await AUTHED[fn]({ ...user, token }, rest) });
   } catch (e) {
     if (e instanceof auth.AppError) return json({ ok: false, error: e.message });
     console.error("seisan-api error", fn, (e as Error)?.name);

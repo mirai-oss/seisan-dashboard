@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.38-files';
+var SD_VERSION = 'v5.39-worker';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -59,7 +59,7 @@ var SD_API_WHITELIST = [
   'sd_suggestAccount', 'sd_bulkCategorize', 'sd_apiCategorizedLines', 'sd_apiAddExternalLine',
   'sd_apiGetLines', 'sd_apiMarkPlSynced', 'sd_apiSuggestMapping', 'sd_apiConfirmMapping',
   'sd_apiUploadAttachment', 'sd_apiDebugExtRef', 'sd_apiCashSync', 'sd_apiRemoveExternalLine',
-  'sd_deleteAttachment', 'sd_apiGetSettlementPdf'
+  'sd_deleteAttachment', 'sd_apiGetSettlementPdf', 'sd_apiWorker'
 ];
 
 function sd_apiFnMap_() {
@@ -81,7 +81,7 @@ function sd_apiFnMap_() {
     sd_apiSuggestMapping: sd_apiSuggestMapping, sd_apiConfirmMapping: sd_apiConfirmMapping,
     sd_apiUploadAttachment: sd_apiUploadAttachment, sd_apiDebugExtRef: sd_apiDebugExtRef,
     sd_apiCashSync: sd_apiCashSync, sd_apiRemoveExternalLine: sd_apiRemoveExternalLine,
-    sd_deleteAttachment: sd_deleteAttachment, sd_apiGetSettlementPdf: sd_apiGetSettlementPdf
+    sd_deleteAttachment: sd_deleteAttachment, sd_apiGetSettlementPdf: sd_apiGetSettlementPdf, sd_apiWorker: sd_apiWorker
   };
 }
 
@@ -1172,7 +1172,7 @@ function sd_migrateData_(){
     if (sh && sh.getLastRow() > 0) sheets[name] = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues();
   });
   var settings = {};
-  Object.keys(ext).forEach(function (k) { if (k.indexOf('発行元_') === 0 || k === 'メール送信者名') settings[k] = ext[k]; });
+  Object.keys(ext).forEach(function (k) { if (k.indexOf('発行元_') === 0 || k === 'メール送信者名' || k === 'ダッシュボードURL') settings[k] = ext[k]; });
 
   var logs = sd_logRows_();
   // アカウントと利用申請。パスワードは、ここで読めない形にしてから送る（読める形のままは送らない）
@@ -3120,6 +3120,13 @@ function sd_buildSeisanHtml_(store, monthKey) {
   var ci = sd_clientInfoAt_(st, monthKey); // 対象月の委託先（運営変更で切り替わる店舗は期間設定を反映）
   var rows = sd_readRowsCached_(st.db);
   var s = sd_settle_(rows, monthKey, st.rate, st.fixed, st.salesName);
+  return sd_seisanHtml_({ store: store, monthKey: monthKey, stName: st.name, ci: ci, ext: ext, rate: st.rate, fixed: st.fixed, s: s });
+}
+
+/* 精算書の見た目（データの読み込みはしない）。今の画面と、新しい仕組み（Supabase）の両方が同じものを使う */
+function sd_seisanHtml_(m) {
+  var store = m.store, monthKey = m.monthKey, ci = m.ci || {}, ext = m.ext || {}, s = m.s;
+  var st = { name: m.stName, rate: m.rate, fixed: m.fixed };
   var d = sd_monthKeyToDate_(monthKey);
   var monthLabel = d.getFullYear() + '年' + (d.getMonth() + 1) + '月';
   var today = Utilities.formatDate(new Date(), SD_TZ, 'yyyy/M/d');
@@ -3224,6 +3231,45 @@ function sd_buildSeisanHtml_(store, monthKey) {
   + '<div class="note">本精算書は精算ダッシュボードから自動発行されました（' + today + '）</div>'
   + '</div></body></html>';
   return { html: html, settle: s };
+}
+
+/* ---------- PDF・メールの係（2026-11-26） ----------
+ * 新しい仕組み（Supabaseの seisan-api）から依頼を受けて、精算書のPDF作成・メール送信・PL同期の起動をする。
+ * 合言葉はスクリプトプロパティ SEISAN_WORKER_SECRET（未設定なら何も受け付けない）。スプレッドシートのデータは使わない。 */
+function sd_apiWorker(secret, job) {
+  var want = String(PropertiesService.getScriptProperties().getProperty('SEISAN_WORKER_SECRET') || '').trim();
+  if (want.length < 32 || sd_sha256hex_(String(secret || '').trim()) !== sd_sha256hex_(want)) return { ok: false, error: 'unauthorized' };
+  job = job || {};
+  if (job.type === 'ping') return { ok: true, ver: SD_VERSION };
+  if (job.type === 'pdf') {
+    var m = job.model || {};
+    if (!m.store || !m.s || !/^\d{4}-\d{2}$/.test(String(m.monthKey || ''))) return { ok: false, error: '精算書の内容が不足しています' };
+    var built = sd_seisanHtml_(m);
+    var blob = Utilities.newBlob(built.html, 'text/html', 'seisan.html').getAs('application/pdf');
+    return { ok: true, b64: Utilities.base64Encode(blob.getBytes()) };
+  }
+  if (job.type === 'mail') {
+    if (!String(job.to || '').trim() || !String(job.subject || '').trim()) return { ok: false, error: '宛先か件名がありません' };
+    var opts = { name: String(job.senderName || '株式会社N-Style') };
+    if (job.cc) opts.cc = String(job.cc);
+    if (job.noReply) opts.noReply = true;
+    var files = [];
+    if (job.pdf && job.pdf.b64) files.push(Utilities.newBlob(Utilities.base64Decode(job.pdf.b64), 'application/pdf', String(job.pdf.name || '精算書.pdf')));
+    var base = String(PropertiesService.getScriptProperties().getProperty('SUPABASE_URL') || '') + '/storage/v1/object/sign/settle-files/';
+    var list = job.attachments || [];
+    for (var i = 0; i < list.length; i++) {
+      var u = String(list[i].url || '');
+      if (u.indexOf(base) !== 0) return { ok: false, error: '添付の取得先が正しくありません' };
+      var res = UrlFetchApp.fetch(u, { muteHttpExceptions: true });
+      if (res.getResponseCode() !== 200) return { ok: false, error: '添付を取得できませんでした: ' + list[i].name };
+      files.push(res.getBlob().setName(String(list[i].name)));
+    }
+    if (files.length) opts.attachments = files;
+    GmailApp.sendEmail(String(job.to), String(job.subject), String(job.body || ''), opts);
+    return { ok: true, attachCount: files.length };
+  }
+  if (job.type === 'dispatchPl') { sd_dispatchPlSync_(String(job.month || '')); return { ok: true }; }
+  return { ok: false, error: '知らない依頼です' };
 }
 
 function sd_renderPdf_(store, monthKey) {
