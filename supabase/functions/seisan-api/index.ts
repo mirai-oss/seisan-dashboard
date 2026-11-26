@@ -9,6 +9,7 @@ import { buildSettings } from "./settings.ts";
 import * as files from "./files.ts";
 import * as issue from "./issue.ts";
 import * as jobs from "./jobs.ts";
+import * as ext from "./ext.ts";
 import { supaStore } from "./store.ts";
 
 const ORIGIN = "https://mirai-oss.github.io";
@@ -108,6 +109,108 @@ async function notifyPortal(store: string, month: string, s: any, resend: boolea
       body: JSON.stringify({ action: "seisan_issued", token, store, month, transfer: s.transfer, transfer_ex: s.transferEx, tax: s.tax, resend, pdf: { file_name: fileName, base64: b64 } }) });
     return { ok: res.ok };
   } catch { return { ok: false }; }
+}
+
+// ---------- 外の仕組みの受け口（サーバー間の共有トークン PL_SYNC_TOKEN で認証） ----------
+const EXT_THROWS = ["sd_apiTransferEx", "sd_apiCategorizedLines", "sd_apiCashSync"]; // 今のGASで、認証失敗が呼び出し全体の失敗になるもの
+const ym = (m: unknown) => /^\d{4}-(0[1-9]|1[0-2])$/.test(String(m ?? ""));
+const sysData = async () => await rpc("settle_system_data", {}) as any;
+const thisMonth = () => jst(new Date()).slice(0, 7);
+const EXT: Record<string, (a: any[]) => Promise<unknown>> = {
+  sd_apiTransferEx: async ([s, m]) => ext.transferEx(await sysData(), String(s), String(m), thisMonth()),
+  sd_apiCategorizedLines: async ([s, m]) => ext.categorizedLines(await sysData(), String(s), String(m)),
+  sd_apiGetLines: async ([items]) => Array.isArray(items) && items.length ? ext.getLines(await sysData(), items) : { ok: true, lines: [] },
+  sd_apiDebugExtRef: async ([s, m]) => ext.debugExtRef(await sysData(), String(s), String(m)),
+  sd_apiSuggestMapping: async ([p]) => {
+    const r = ext.resolveMapping(await sysData(), String(p?.store ?? ""), String(p?.mfAccount ?? "").trim(), String(p?.mfSubAccount ?? "").trim(), String(p?.vendor ?? "").trim(), String(p?.item ?? "").trim());
+    return r ? { ok: true, resolved: true, account: r.account, source: r.source } : { ok: true, resolved: false };
+  },
+  sd_apiConfirmMapping: async ([p]) => {
+    const mf = String(p?.mfAccount ?? "").trim(), on = p?.onOff !== false && p?.onOff !== "OFF", account = String(p?.account ?? "").trim();
+    if (!mf) return { ok: false, error: "mfAccountが空です" };
+    if (on && !account) return { ok: false, error: "PL対象ONの場合はaccount（PL表示科目）が必須です" };
+    const { error } = await db.from("settle_pl_mappings").upsert({ mf_account: mf, mf_sub: String(p?.mfSubAccount ?? "").trim(), vendor: String(p?.vendor ?? "").trim(), on_off: on, account: on ? account : "", updated_at: jst(new Date()).slice(0, 16).replace("T", " "), updated_by: String(p?.user ?? "") }, { onConflict: "mf_account,mf_sub,vendor" });
+    if (error) throw new Error("database");
+    return { ok: true };
+  },
+  sd_apiMarkPlSynced: async ([store, m, result]) => {
+    if (!ym(m)) return { ok: false, error: "年月が不正です（例: 2026-08）" };
+    if (!store) return { ok: false, error: "店舗名が空です" };
+    const now = new Date().toISOString(), ok = !!result?.ok;
+    const prev = await db.from("settle_pl_sync_logs").select("last_ok_at").eq("store", store).eq("month", m).maybeSingle();
+    const { error } = await db.from("settle_pl_sync_logs").upsert({ store, month: m, ok, last_ok_at: ok ? String(result?.syncedAt || now) : prev.data?.last_ok_at ?? "", error: ok ? "" : String(result?.error ?? ""), last_attempt_at: now });
+    if (error) throw new Error("database");
+    return { ok: true };
+  },
+  sd_apiAddExternalLine: async ([store, m, line]) => {
+    const p: any = { ...(line ?? {}) };
+    let account = String(p.account ?? "").trim(), source = account ? "explicit" : "", needs = false;
+    if (!account) {
+      const r = ext.resolveMapping(await sysData(), String(store), String(p.mfAccount ?? "").trim(), String(p.mfSubAccount ?? "").trim(), String(p.vendor ?? "").trim(), String(p.item ?? "").trim());
+      if (r) { account = r.account; source = r.source; } else needs = true;
+    }
+    try {
+      const res: any = await rpc("settle_ext_upsert", { p_store: store, p_month: m, p: { ...p, account } });
+      return res.ok ? { ...res, account, needsMapping: needs, mappingSource: source } : res;
+    } catch (e) { if (e instanceof auth.AppError) return { ok: false, error: e.message }; throw e; }
+  },
+  sd_apiRemoveExternalLine: async ([store, m, key]) => {
+    try { return { ok: true, result: await rpc("settle_ext_remove", { p_store: store, p_month: m, p_key: key }) }; }
+    catch (e) { if (e instanceof auth.AppError) return { ok: false, error: e.message }; throw e; }
+  },
+  sd_apiUploadAttachment: async ([store, m, p]) => {
+    if (!ym(m)) return { ok: false, error: "年月が不正です（例: 2026-08）" };
+    if (!String(p?.kind ?? "").trim()) return { ok: false, error: "費目名（kind）が空です" };
+    const bytes = files.decodeB64(p?.b64);
+    if (!bytes) return { ok: false, error: "ファイルデータ（b64）が空か、大きすぎます" };
+    if ((await deps.store.mode()) !== "live") return { ok: false, error: "切り替え前のため、ここには保存できません" };
+    const d = await sysData(), st = d.stores.find((s: any) => s.name === store);
+    if (!st) return { ok: false, error: "店舗が見つかりません: " + store };
+    if (ext.isLocked(d, st, m)) return { ok: false, error: m + "分は振込済み（確定済み）のためアップロードできません", locked: true };
+    const uniq = String(p.uniq ?? "").replace(/[^0-9A-Za-z]/g, "").slice(0, 8);
+    const n = files.attachmentName(p.kind, m, store, p.fileName, false, []);
+    const name = uniq ? n.name.slice(0, n.name.length - n.ext.length) + "__" + uniq + n.ext : n.name;
+    const path = `files/${m}/${crypto.randomUUID()}${n.ext.toLowerCase()}`, mime = files.safeMime(p.mimeType);
+    if ((await bucket().upload(path, bytes, { contentType: mime })).error) return { ok: false, error: "ファイルの保存に失敗しました" };
+    const ins = await db.from("settle_attachments").insert({ store_key: st.store_key, month: m, file_name: name, storage_path: path, mime, size_bytes: bytes.length, uploaded_by: "自動連携" }).select("id").single();
+    if (ins.error) { await bucket().remove([path]); return { ok: false, error: "記録に失敗しました" }; }
+    // 同じ名前の古いものは消した印を付ける（今の仕組みの上書きと同じ）
+    await db.from("settle_attachments").update({ deleted_at: new Date().toISOString(), deleted_by: "自動連携（差し替え）" }).eq("store_key", st.store_key).eq("month", m).eq("file_name", name).neq("id", ins.data.id).is("deleted_at", null);
+    return { ok: true, name, url: (await bucket().createSignedUrl(path, 3600)).data?.signedUrl ?? "" };
+  },
+  sd_apiGetSettlementPdf: async ([store, m]) => {
+    if (!ym(m)) return { ok: false, error: "年月が不正です（例: 2026-09）" };
+    try {
+      const d = await sysData();
+      const model = issue.statementModel({ ...d, thisMonth: thisMonth() }, { name: "自動連携", role: "マスター" }, String(store), String(m));
+      if (!model) return { ok: false, error: "店舗が見つかりません: " + store };
+      const pdf = await worker({ type: "pdf", model });
+      return { ok: true, file_name: issue.pdfName(model.store, String(m), false), base64: pdf.b64 };
+    } catch (e) { return { ok: false, error: (e as Error).message }; }
+  },
+  sd_apiCashSync: async ([m, names]) => {
+    if (!ym(m)) throw new auth.AppError("monthKey は YYYY-MM 形式");
+    const list = (Array.isArray(names) ? names : []).map((x: any) => String(x ?? "").trim()).filter(Boolean);
+    if (!list.length) return { ok: true, results: ["対象店舗がありません"] };
+    await worker({ type: "pushSales", month: m }); // レジの値を直した直後に呼ばれるので、売上を取り込み直してから反映する
+    const d = await sysData(), results: string[] = [], allowed: string[] = [];
+    for (const n of list) {
+      const st = d.stores.find((s: any) => s.name === n);
+      if (st && ext.isLocked(d, st, m)) results.push(n + ": 振込済みのため更新しません（精算書の現金売上は手動で確認してください）"); else allowed.push(n);
+    }
+    if (!allowed.length) return { ok: true, results };
+    const r: any = await rpc("settle_cash_apply", { actor: { name: "レジ照合(自動)", role: "本部" }, p_month: m, p_stores: allowed, p_skip_existing: false });
+    return { ok: true, results: results.concat(r.results) };
+  },
+};
+async function runExt(fn: string, args: any[]) {
+  const [token, ...rest] = args;
+  const want = (Deno.env.get("PL_SYNC_TOKEN") ?? "").trim();
+  if (!want || (await auth.sha256hex(String(token ?? "").trim())) !== (await auth.sha256hex(want))) {
+    if (EXT_THROWS.includes(fn)) throw new auth.AppError("unauthorized");
+    return { ok: false, error: "unauthorized" };
+  }
+  return await EXT[fn](rest);
 }
 
 // ログインが必要なもの（a は、トークンより後ろの引数）
@@ -212,6 +315,7 @@ Deno.serve(async (req: Request) => {
   const t0 = Date.now();
   try {
     if (fn === "sd_cronDaily") return json({ ok: true, result: await runDaily(args[0]) });
+    if (Object.hasOwn(EXT, fn)) return json({ ok: true, result: await runExt(fn, args) });
     if (Object.hasOwn(PUBLIC, fn)) return json({ ok: true, result: await PUBLIC[fn](args) });
     const READS = ["sd_getDashboard", "sd_getSettings", "sd_getOpsSettings", "sd_listAttachments", "sd_getPdfB64", "sd_pdfPreview"];
     if (!READS.includes(fn) && !Object.hasOwn(AUTHED, fn)) return json({ ok: false, error: "この機能は、移行の次の段階で使えるようになります" });
@@ -225,9 +329,10 @@ Deno.serve(async (req: Request) => {
       if (!data) return json({ ok: false, error: "AUTH" }, 401);
       const readMs = Date.now() - t0;
       const result: any = buildDashboard({ ...data.data, thisMonth: jst(new Date()).slice(0, 7) }, data.user, month);
-      result.ver = "db-test";
+      const live = (await deps.store.mode()) === "live";
+      result.ver = live ? "v6.0" : "db-test";
       result.sheetUrl = "";
-      result.updatedAt = jst(new Date(data.importedAt)).slice(0, 16).replace("T", " ");
+      result.updatedAt = jst(live ? new Date() : new Date(data.importedAt)).slice(0, 16).replace("T", " ");
       result._ms = { read: readMs, total: Date.now() - t0 };
       return json({ ok: true, result });
     }

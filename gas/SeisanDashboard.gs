@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.40-jobs';
+var SD_VERSION = 'v5.41-ready';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -1200,22 +1200,27 @@ function sd_salesRows_(sums, months){
  * ①レジの月間売上（直近4か月）を Supabase へ入れる ②定期処理（定期費目・現金取込・未処理の通知の判断）を seisan-api に依頼する。
  * 切り替え前は、②は何もしない。 */
 var SD_NEW_API = 'https://uuvsxzhpxtghojoubjcc.supabase.co/functions/v1/seisan-api';
-function sd_liveDaily(){
+/* レジの月間売上を Supabase へ入れる。戻り値は入れた件数（失敗は例外） */
+function sd_pushSales_(months){
   var h = sd_sessionSupaHeaders_(); if (!h) throw new Error('SUPABASE_URL / SUPABASE_SERVICE_KEY が未設定です');
-  var ext = sd_extConfig_(), thisM = sd_thisMonthKey_();
+  var rows = sd_salesRows_(sd_paySumsMulti_(sd_extConfig_(), months) || {}, months);
+  if (!rows.length) return 0;
+  var r = UrlFetchApp.fetch(h.url + '/rest/v1/rpc/settle_sales_push', { method: 'post', headers: h.headers, muteHttpExceptions: true, payload: JSON.stringify({ p: rows }) });
+  if (r.getResponseCode() >= 300) throw new Error('レジ売上の取り込みに失敗（' + r.getResponseCode() + '）');
+  return rows.length;
+}
+function sd_liveDaily(){
+  var thisM = sd_thisMonthKey_();
   var months = [-3, -2, -1, 0].map(function (n) { return sd_addMonths_(thisM, n); }).filter(function (m) { return m >= SD_START_MONTH; });
-  var rows = sd_salesRows_(sd_paySumsMulti_(ext, months) || {}, months);
-  var problems = [];
-  if (rows.length) {
-    var r = UrlFetchApp.fetch(h.url + '/rest/v1/rpc/settle_sales_push', { method: 'post', headers: h.headers, muteHttpExceptions: true, payload: JSON.stringify({ p: rows }) });
-    if (r.getResponseCode() >= 300) problems.push('レジ売上の取り込みに失敗（' + r.getResponseCode() + '）');
-  } else problems.push('レジ売上が読めませんでした');
+  var problems = [], count = 0;
+  try { count = sd_pushSales_(months); if (!count) problems.push('レジ売上が読めませんでした'); }
+  catch (eS) { problems.push(String(eS.message || eS)); }
   var secret = PropertiesService.getScriptProperties().getProperty('SEISAN_WORKER_SECRET');
   var res = UrlFetchApp.fetch(SD_NEW_API, { method: 'post', contentType: 'text/plain', muteHttpExceptions: true, payload: JSON.stringify({ fn: 'sd_cronDaily', args: [secret] }) });
   var out = {}; try { out = JSON.parse(res.getContentText()); } catch (e) { /* 下で失敗扱い */ }
   if (!out.ok) problems.push('定期処理に失敗: ' + (out.error || res.getResponseCode()));
   else if (out.result.slack) sd_notifySlack_(out.result.slack.text, out.result.slack.key, 'seisan_remind');
-  Logger.log('毎日の処理: 売上' + rows.length + '件／' + JSON.stringify(out.result || {}).slice(0, 500) + (problems.length ? '／⚠ ' + problems.join('、') : ''));
+  Logger.log('毎日の処理: 売上' + count + '件／' + JSON.stringify(out.result || {}).slice(0, 500) + (problems.length ? '／⚠ ' + problems.join('、') : ''));
   if (problems.length) sd_notifySlack_('⚠【精算ダッシュボード 毎日の処理】' + problems.join('、'), 'seisan_daily_error:' + sd_fmtMonth_(new Date()) + new Date().getDate(), 'seisan_error');
 }
 
@@ -3330,6 +3335,11 @@ function sd_apiWorker(secret, job) {
     return { ok: true, attachCount: files.length };
   }
   if (job.type === 'dispatchPl') { sd_dispatchPlSync_(String(job.month || '')); return { ok: true }; }
+  if (job.type === 'pushSales') {
+    if (!/^\d{4}-\d{2}$/.test(String(job.month || ''))) return { ok: false, error: '対象月が不正です' };
+    var n = sd_pushSales_([String(job.month)]);
+    return n > 0 ? { ok: true, count: n } : { ok: false, error: 'レジ売上を取り込めませんでした' };
+  }
   return { ok: false, error: '知らない依頼です' };
 }
 

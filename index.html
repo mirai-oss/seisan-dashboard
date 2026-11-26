@@ -447,13 +447,14 @@ function saveToken_(t){ localStorage.setItem(DB_MODE?'sd_token_db':'sd_token', t
  * 受け口）。これによりportal側から精算ダッシュボードへ再訪問した際も既存のdashCache（月別
  * キャッシュ）がそのまま生きた状態で瞬時に表示できる（iframe自体を作り直さない前提）。 */
 var EMBED_MODE=false, PENDING_VIEW='';
-var DB_MODE=false; // 試験表示（?source=db）: 画面のデータをSupabaseから読む。読むだけ
+var NEW_SYSTEM=false; // 切り替えの日に true にする（新しい仕組みがいつもの画面になる）
+var DB_MODE=false; // 画面のデータをSupabaseから読み書きする。切り替え前は ?source=db の試験表示だけ
 var SEISAN_VIEWS_=['check','corp','annual','input','settings'];
 try{
   var q0=new URLSearchParams(location.search);
   if(q0.get('embed')==='1') EMBED_MODE=true;
   PENDING_VIEW=q0.get('view')||'';
-  DB_MODE=q0.get('source')==='db';
+  DB_MODE=NEW_SYSTEM||q0.get('source')==='db';
 }catch(e){}
 if(DB_MODE) state.token=localStorage.getItem('sd_token_db')||state.token;
 window.addEventListener('message', function(ev){
@@ -906,9 +907,10 @@ function loadFromDb_(monthKey){
       state.data=res.result; state.month=res.result.month;
       render(); loading(false);
       var bar=document.getElementById('stale-bar');
-      bar.style.display='flex';
+      var testing=res.result.ver==='db-test'; // 切り替え前の試験表示だけ案内を出す
+      bar.style.display=testing?'flex':'none';
       document.getElementById('stale-retry').style.display='none';
-      document.getElementById('stale-msg').textContent='🧪 試験表示（Supabase）: 表示まで '+(ms/1000).toFixed(1)+'秒 ／ データは '+res.result.updatedAt+' 時点の写し ／ 切り替え前のため、登録や修正は反映されません';
+      if(testing) document.getElementById('stale-msg').textContent='🧪 試験表示（Supabase）: 表示まで '+(ms/1000).toFixed(1)+'秒 ／ データは '+res.result.updatedAt+' 時点の写し ／ 切り替え前のため、登録や修正は反映されません';
       logApiPerf_('db_dashboard', ms, true, '');
     })
     .catch(function(e){ if(seq!==loadSeq) return; loading(false); toast('読み込みエラー: '+(e.message||e)); });
@@ -1013,6 +1015,7 @@ function render(){
 
   var sel=document.getElementById('month-select');
   sel.innerHTML=d.months.map(function(mk){ return '<option value="'+mk+'"'+(mk===d.month?' selected':'')+'>'+mLabel(mk)+'</option>'; }).join('');
+  if(DB_MODE) hideSheetOnly_();
   renderDupBanner_();
   renderKpis();
   renderCards();
@@ -1149,6 +1152,13 @@ function renderCards(){
   }).join('');
 }
 
+/* 新しい仕組みでは使わない、スプレッドシート向けの操作を隠す */
+function hideSheetOnly_(){
+  Array.prototype.forEach.call(document.querySelectorAll('[onclick^="updateCheckSheet"],[onclick^="testChatwork"],[onclick^="openBulkCategorize"]'), function(b){
+    var card=b.closest&&b.closest('.settle-setting'); (card||b).style.display='none';
+  });
+  var link=document.getElementById('master-link'); if(link&&link.parentElement) link.parentElement.style.display='none';
+}
 /* ===== 二重計上の疑い（2026-11-26） ===== */
 function renderDupBanner_(){
   var el=document.getElementById('dup-banner'); if(!el) return;
