@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.30-rowscache';
+var SD_VERSION = 'v5.31-warm';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -1027,17 +1027,81 @@ function sd_snapScope_(user){
   var stores = all ? 'ALL' : String(user.storesRaw).split(/[,、，]/).map(function (s) { return sd_norm_(s); }).filter(String).sort().join(',');
   return sd_sha256hex_(String(user.role) + '|' + stores);
 }
+function sd_snapPayload_(tokenHash, user, data){
+  var p = { token_hash: tokenHash, scope_key: sd_snapScope_(user), user_name: String(user.name || ''), user_role: String(user.role || '') };
+  if (data) {
+    var copy = {};
+    Object.keys(data).forEach(function (k) { if (k !== '_ms' && k !== 'user') copy[k] = data[k]; });
+    p.month_key = data.month;
+    p.data = copy;
+  }
+  return p;
+}
 function sd_snapSave_(token, user, data){
   try {
-    var p = { token_hash: sd_sha256hex_(String(token)), scope_key: sd_snapScope_(user), user_name: String(user.name || ''), user_role: String(user.role || '') };
-    if (data) {
-      var copy = {};
-      Object.keys(data).forEach(function (k) { if (k !== '_ms' && k !== 'user') copy[k] = data[k]; });
-      p.month_key = data.month;
-      p.data = copy;
-    }
-    sd_snapRpc_('sd_dash_put', { p: p });
+    sd_snapRpc_('sd_dash_put', { p: sd_snapPayload_(sd_sha256hex_(String(token)), user, data) });
   } catch (e) { /* 写しの保存に失敗しても画面は出す */ }
+}
+/* ---------- 画面の写しの作り置き（2026-11-26） ----------
+ * 1時間ごとに、直近の月の写しを作り直しておく（初めて開く月もすぐ出るようにする）。
+ * 有効な権限アカウントの「見える範囲」ごとに作る。画面の表示と同じ組み立て(sd_buildDashboard_)を使う。
+ * 始める: エディタで sd_setupSnapWarm を1回実行。止める: sd_stopSnapWarm を実行。 */
+var SD_WARM_OFFSETS = [-1, 0, -2, -3];     // 前月（最初に開く月）→今月→2か月前→3か月前
+var SD_WARM_HOURS = { from: 7, to: 23 };   // この時間帯（日本時間）だけ動く
+var SD_WARM_LIMIT_MS = 270000;             // 1回の実行は4分半まで（GASの上限6分より前に切り上げる）
+function sd_warmUsers_(){
+  var sh = sd_authSheet_(), lastR = sh.getLastRow();
+  if (lastR < 2) return [];
+  var seen = {}, out = [];
+  sh.getRange(2, 1, lastR - 1, 7).getDisplayValues().forEach(function (v) {
+    if (!String(v[0]).trim() || sd_norm_(v[5]).toUpperCase() === 'FALSE') return;
+    var user = { name: '', role: sd_normRole_(v[3]), storesRaw: String(v[4]).trim() };
+    var key = sd_snapScope_(user);
+    if (!seen[key]) { seen[key] = true; out.push({ key: key, user: user }); }
+  });
+  return out;
+}
+function sd_snapWarmTick(){
+  var props = PropertiesService.getScriptProperties();
+  if (props.getProperty('DASH_SNAPSHOT') === 'off') return;
+  var now = new Date();
+  var hour = Number(Utilities.formatDate(now, SD_TZ, 'H'));
+  if (hour < SD_WARM_HOURS.from || hour >= SD_WARM_HOURS.to) return;
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(0)) return; // 前の回がまだ動いている
+  try {
+    var users = sd_warmUsers_(), jobs = [];
+    var ym = Utilities.formatDate(now, SD_TZ, 'yyyy-MM');
+    SD_WARM_OFFSETS.forEach(function (n) {
+      var mk = sd_addMonths_(ym, n);
+      if (mk >= SD_START_MONTH) users.forEach(function (u) { jobs.push({ month: mk, u: u }); });
+    });
+    // 時間切れで残った分は、次の回で続きから作る
+    var start = Number(props.getProperty('SNAP_WARM_NEXT') || 0) % (jobs.length || 1);
+    var t0 = Date.now(), done = 0, failed = 0, i = 0;
+    for (; i < jobs.length && Date.now() - t0 < SD_WARM_LIMIT_MS; i++) {
+      var j = jobs[(start + i) % jobs.length];
+      try {
+        var data = sd_buildDashboard_(j.u.user, j.month, sd_timer_());
+        // 作り置きは閲覧の権利を増やさない（どのトークンとも一致しない目印で保存する）
+        sd_snapRpc_('sd_dash_put', { p: sd_snapPayload_('warm:' + j.u.key, j.u.user, data) });
+        done++;
+      } catch (e) { failed++; Logger.log('作り置き失敗 ' + j.month + ': ' + e.message); }
+    }
+    props.setProperty('SNAP_WARM_NEXT', String(i >= jobs.length ? 0 : (start + i) % jobs.length));
+    Logger.log('画面の写しの作り置き: ' + done + '件／対象' + jobs.length + '件／失敗' + failed + '件／' + Math.round((Date.now() - t0) / 1000) + '秒');
+  } finally {
+    lock.releaseLock();
+  }
+}
+function sd_setupSnapWarm(){
+  sd_stopSnapWarm();
+  ScriptApp.newTrigger('sd_snapWarmTick').timeBased().everyHours(1).create();
+  Logger.log('作り置きを1時間ごとに設定しました。続けて1回目を作ります');
+  sd_snapWarmTick();
+}
+function sd_stopSnapWarm(){
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'sd_snapWarmTick') ScriptApp.deleteTrigger(t); });
 }
 function sd_sessionGet_(token){
   if (sd_sessionBackend_() === 'supabase') {
@@ -1539,6 +1603,15 @@ function sd_getDashboard(token, monthKey) {
   var timer = sd_timer_();
   var user = sd_auth_(token, false);
   timer.mark('auth');
+  var result = sd_buildDashboard_(user, monthKey, timer);
+  sd_snapSave_(token, user, result);
+  timer.mark('snapshot');
+  result._ms = timer.breakdown();
+  return result;
+}
+
+/* 画面に出すデータの組み立て。見える店舗は user の権限と担当店舗で決まる（画面の表示と作り置きで共通） */
+function sd_buildDashboard_(user, monthKey, timer) {
   var ss = SpreadsheetApp.getActive();
   var det = sd_detect_();
   var master = sd_masterStores_(det);
@@ -1656,9 +1729,6 @@ function sd_getDashboard(token, monthKey) {
     sheetUrl: user.role === '本部' ? ss.getUrl() : '',
     updatedAt: Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd HH:mm')
   };
-  sd_snapSave_(token, user, result);
-  timer.mark('snapshot');
-  result._ms = timer.breakdown();
   return result;
 }
 
