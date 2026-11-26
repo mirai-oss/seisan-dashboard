@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.33-point';
+var SD_VERSION = 'v5.34-migrate1';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -1101,6 +1101,99 @@ function sd_setupSnapWarm(){
 }
 function sd_stopSnapWarm(){
   ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'sd_snapWarmTick') ScriptApp.deleteTrigger(t); });
+}
+/* ---------- 移行 段階1: スプレッドシートのデータをSupabaseへ写す（2026-11-26） ----------
+ * 正本はスプレッドシートのまま。シートは読むだけで、書き換えない。ログイン情報・パスワード・各種の鍵は送らない。
+ * 手で1回: エディタで sd_migrateSync を実行。定期的に: sd_setupMigrateSync（毎日6時）。止める: sd_stopMigrateSync。 */
+function sd_migrateData_(){
+  var det = sd_detect_();
+  var cfg = sd_config_(sd_masterStores_(det), det);
+  var ext = sd_extConfig_();
+  var thisM = sd_thisMonthKey_();
+  var monthSet = {};
+  sd_monthList_(thisM).forEach(function (m) { monthSet[m] = true; });
+  var stores = [], lines = [], rowsByStore = {};
+  cfg.forEach(function (st) {
+    var rows = st.db ? sd_readRows_(st.db) : [];
+    rowsByStore[st.name] = rows;
+    rows.forEach(function (r) {
+      if (r.ym >= SD_START_MONTH) monthSet[r.ym] = true;
+      lines.push({ store: st.name, sheet: st.db.sheet, row: r.row, ym: r.ym, kubun: r.kubun, item: r.item, amount: r.amount, tax: r.tax,
+        note: r.note, editor: r.editor, at: r.at, edited: r.edited, paid: r.paid, account: r.account, subAccount: r.subAccount, extRef: r.extRef });
+    });
+    var f = st.fixed || {};
+    stores.push({ name: st.name, client: st.client, corp: st.corp, invoice: st.invoice, rep: st.rep, rate: st.rate,
+      ratePct: parseFloat(String(st.rate).replace(/[%％]/g, '')) || 0,
+      rent: f.rent || 0, ins: f.ins || 0, sss: f.sss || 0, f4: f.f4 || 0, f5: f.f5 || 0,
+      required: st.required, dbSheet: st.db ? st.db.sheet : '', salesName: st.salesName, mail: sd_mailSettings_(det, st.name) });
+  });
+  var months = Object.keys(monthSet).sort();
+
+  var payments = [];
+  var ps = sd_paidSheet_(), pl = ps.getLastRow();
+  if (pl > 1) ps.getRange(2, 1, pl - 1, 6).getDisplayValues().forEach(function (r, i) {
+    if (!sd_norm_(r[0]) || !String(r[1]).trim()) return;
+    var done = sd_norm_(r[2]).toUpperCase() === 'TRUE' || r[2] === '✅';
+    payments.push({ seq: i + 2, name: r[0], month: String(r[1]).trim(), done: done, date: r[3], by: r[4],
+      amount: Number(String(r[5]).replace(/[^0-9.\-]/g, '')) || 0 });
+  });
+
+  // レジの月間売上（全店舗分）とポイント
+  var salesMonths = months.filter(function (m) { return m <= thisM; });
+  var sums = sd_paySumsMulti_(ext, salesMonths) || {};
+  var sales = [];
+  salesMonths.forEach(function (m) {
+    var map = sums[m] || {};
+    Object.keys(map).forEach(function (k) {
+      if (k.indexOf('pt:') === 0) return;
+      sales.push({ key: k, month: m, pay: map[k], point: map['pt:' + k] === undefined ? null : map['pt:' + k] });
+    });
+    SD_ACTUAL_MEMO_[m] = map; // 突き合わせの正解も、同じ時点のレジの値で計算する
+  });
+
+  // 今の計算結果（突き合わせの正解）
+  var paidAll = sd_paidMap_(), expected = [];
+  cfg.forEach(function (st) {
+    months.forEach(function (m) {
+      var x = sd_settle_(rowsByStore[st.name], m, st.rate, st.fixed, st.salesName);
+      var client = sd_clientInfoAt_(st, m).client;
+      var paid = sd_paidStatusMap_(st.name, client, paidAll)[m];
+      expected.push({ store: st.name, month: m, count: x.count, sales: x.sales, varCost: x.varCost, royF: x.royF, royV: x.royV, royBase: x.royBase,
+        costTotal: x.costTotal, transfer: x.transfer, transferEx: x.transferEx, client: client || '',
+        paid: !!(paid && paid.done), paidTotal: (paid && paid.total) || 0 });
+    });
+  });
+
+  var sheets = {};
+  [SD_CORP_SHEET, SD_PLSYNC_LOG_SHEET, SD_MAPPING_SHEET].forEach(function (name) {
+    var sh = SpreadsheetApp.getActive().getSheetByName(name);
+    if (sh && sh.getLastRow() > 0) sheets[name] = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getDisplayValues();
+  });
+  var settings = {};
+  Object.keys(ext).forEach(function (k) { if (k.indexOf('発行元_') === 0 || k === 'メール送信者名') settings[k] = ext[k]; });
+
+  var logs = sd_logRows_();
+  var recurring = sd_recurRows_().map(function (r) { return { store: r.store, kubun: r.kubun, item: r.item, amount: r.amount, tax: r.tax, note: r.note, status: r.status }; });
+  return { ver: SD_VERSION, thisMonth: thisM, stores: stores, lines: lines, periods: sd_periodRows_(), recurring: recurring,
+    payments: payments, logs: logs, sales: sales, sheets: sheets, settings: settings, expected: expected };
+}
+function sd_migrateSync(){
+  var h = sd_sessionSupaHeaders_();
+  if (!h) throw new Error('SUPABASE_URL / SUPABASE_SERVICE_KEY が未設定です');
+  var t0 = Date.now();
+  var res = UrlFetchApp.fetch(h.url + '/rest/v1/rpc/settle_import', {
+    method: 'post', headers: h.headers, muteHttpExceptions: true, payload: JSON.stringify({ p: sd_migrateData_() })
+  });
+  if (res.getResponseCode() >= 300) throw new Error('取り込みに失敗（' + res.getResponseCode() + '）: ' + String(res.getContentText()).slice(0, 300));
+  Logger.log('移行データの取り込み: ' + res.getContentText() + '／' + Math.round((Date.now() - t0) / 1000) + '秒');
+}
+function sd_setupMigrateSync(){
+  sd_stopMigrateSync();
+  ScriptApp.newTrigger('sd_migrateSync').timeBased().everyDays(1).atHour(6).create();
+  sd_migrateSync();
+}
+function sd_stopMigrateSync(){
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'sd_migrateSync') ScriptApp.deleteTrigger(t); });
 }
 function sd_sessionGet_(token){
   if (sd_sessionBackend_() === 'supabase') {
