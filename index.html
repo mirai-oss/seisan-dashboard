@@ -2162,13 +2162,19 @@ function downloadAnnualCsv(){
 }
 
 /* ===== 先の月へ一括計上 ===== */
+/* 一括計上で選べる月: 画面の月の一覧に加えて、対象月の36ヶ月先まで（分割払いの登録用・2026-11-26） */
+function bulkMonths_(months, current){
+  var out=months.slice(), last=addMonthStr(current,36), k=out[out.length-1];
+  while(k<last){ k=addMonthStr(k,1); out.push(k); }
+  return out;
+}
 function openBulkModal(){
   var d=state.data;
   var stOpts=d.stores.map(function(s){return '<option>'+esc(s.name)+'</option>';}).join('');
   var kuOpts=d.kubunOptions.map(function(k){return '<option'+(k==='変動費'?' selected':'')+'>'+esc(k)+'</option>';}).join('');
-  var mOpts=d.months.map(function(mk){return '<option value="'+mk+'">'+mLabel(mk)+'</option>';}).join('');
+  var mOpts=bulkMonths_(d.months, state.month).map(function(mk){return '<option value="'+mk+'">'+mLabel(mk)+'</option>';}).join('');
   var taxOpts=d.taxOptions.map(function(t){return '<option>'+esc(t)+'</option>';}).join('');
-  var body='<p class="muted" style="margin-bottom:10px">同じ費目を、開始月から終了月まで毎月まとめて計上します（例：2026年7月〜12月まで毎月30万円を変動費）。</p>'
+  var body='<p class="muted" style="margin-bottom:10px">同じ費目を、開始月から終了月まで毎月まとめて計上します（例：分割払いを毎月10万円、3年先まで）。一度に60ヶ月まで。同じ月にもう一度実行すると2件になるので、期間を確認してください。</p>'
     +'<div class="settle-entry-top"><div><label>店舗</label><select id="bk-store">'+stOpts+'</select></div>'
     +'<div><label>区分</label><select id="bk-kubun">'+kuOpts+'</select></div>'
     +'<div><label>税率</label><select id="bk-tax">'+taxOpts+'</select></div></div>'
