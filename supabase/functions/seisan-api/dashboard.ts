@@ -149,11 +149,11 @@ export function dupSuspects(rows: any[], isLocked: (m: string) => boolean) {
   for (const [k, g] of groups) {
     if (g.rows.length < 2) continue;
     if (k.startsWith('inv|') && g.rows.every((r) => r.month === g.rows[0].month)) continue;
-    const id = g.rows.map((r) => r.legacy_row).sort((a, b) => a - b).join(',');
+    const id = g.rows.map((r) => r.id).sort((a, b) => a - b).join(',');
     if (seen.has(id)) continue;
     seen.add(id);
     if (g.rows.every((r) => isLocked(r.month))) continue;
-    out.push({ reason: g.reason, rows: [...g.rows].sort((a, b) => (a.month < b.month ? -1 : a.month > b.month ? 1 : a.legacy_row - b.legacy_row))
+    out.push({ reason: g.reason, rows: [...g.rows].sort((a, b) => (a.month < b.month ? -1 : a.month > b.month ? 1 : a.id - b.id))
       .map((r) => ({ month: r.month, kubun: r.kubun ?? '', item: r.item ?? '', amount: Number(r.amount), note: r.note ?? '', paid: isLocked(r.month) })) });
   }
   return out;
@@ -173,7 +173,8 @@ export function buildDashboard(data: Data, user: User, monthKey: string | null) 
   const clients = new Set<string>();
 
   const stores = cfg.map((st) => {
-    const rows = data.lines.filter((l) => l.store_key === st.store_key).sort((a, b) => a.legacy_row - b.legacy_row);
+    const rows = data.lines.filter((l) => l.store_key === st.store_key && !l.deleted_at)
+      .sort((a, b) => (a.legacy_row ?? Infinity) - (b.legacy_row ?? Infinity) || a.id - b.id); // 写した行は元の順、あとから足した行は登録順
     const byMonth: Record<string, any[]> = {};
     for (const r of rows) { (byMonth[r.month] ||= []).push(r); if (r.kubun) kubun.add(r.kubun); }
     const register = (mk: string) => {
@@ -199,7 +200,7 @@ export function buildDashboard(data: Data, user: User, monthKey: string | null) 
     }
     const chk = st.db_sheet ? missing(byMonth, month, st.required_items) : { missing: [], catWarn: ['DBシート未検出'] };
     const curRows = (byMonth[month] || []).map((r) => ({
-      row: r.legacy_row, kubun: r.kubun ?? '', item: r.item ?? '', amount: Number(r.amount), tax: r.tax ?? '', note: r.note ?? '',
+      row: r.id, kubun: r.kubun ?? '', item: r.item ?? '', amount: Number(r.amount), tax: r.tax ?? '', note: r.note ?? '',
       editor: r.editor ?? '', at: r.entered_at ?? '', edited: r.edited_at ?? '', account: r.account ?? '', subAccount: r.sub_account ?? '',
       extRef: r.ext_ref ?? '',
     }));
