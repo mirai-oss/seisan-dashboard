@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.31-warm';
+var SD_VERSION = 'v5.32-paysums';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -431,13 +431,11 @@ function sd_config_(master, det) {
 /* 変動ロイヤリティの基準にする「売上シート（レジ実績）の月間売上」。取れない・対象月より前なら null（従来の計算へ） */
 function sd_actualSalesFor_(salesName, monthKey) {
   try {
-    if (!salesName || String(monthKey) < SD_ROYALTY_ACTUAL_FROM) return null;
+    if (!salesName || String(monthKey) < SD_ROYALTY_ACTUAL_FROM || String(monthKey) > sd_thisMonthKey_()) return null; // 先の月はレジ実績がまだ無い
     var map = SD_ACTUAL_MEMO_[monthKey];
     if (map === undefined) {
-      var det = sd_detect_();
-      var cfg0 = sd_config_(sd_masterStores_(det), det);
-      map = sd_paySumsCached_(sd_extConfig_(), monthKey, cfg0) || null;
-      SD_ACTUAL_MEMO_[monthKey] = map;
+      sd_loadPaySums_(sd_extConfig_(), [monthKey]);
+      map = SD_ACTUAL_MEMO_[monthKey];
     }
     if (!map) return null;
     var v = map[sd_norm_(salesName)];
@@ -1633,7 +1631,10 @@ function sd_buildDashboard_(user, monthKey, timer) {
   var paidAll = sd_paidMap_();
   var corps = sd_corpMap_(cfg);
   var ext = sd_extConfig_();
-  var payMap = sd_paySumsCached_(ext, monthKey, cfg); // 売上シートS列の対象月合計（未設定ならnull）
+  // 表示する月と、レジ実績で計算する月（今月まで）の売上を、まとめて1回で用意する
+  var thisM = sd_thisMonthKey_();
+  sd_loadPaySums_(ext, [monthKey].concat(months.filter(function (mk) { return mk >= SD_ROYALTY_ACTUAL_FROM && mk <= thisM; })));
+  var payMap = sd_paySumsCached_(ext, monthKey); // 売上シートS列の対象月合計（未設定ならnull）
   timer.mark('paidCorpsPayMap');
 
   var stores = cfg.map(function (st) {
@@ -2789,7 +2790,10 @@ function sd_cashSums_(ext, monthKey, cfg) {
 /* ---------- 売上照合（S列 支払合計 の月合計を店舗別に集計） ----------
  * 精算書に入力された売上合計と、売上シート側の実売上（支払合計）を突き合わせる指標。
  * 月切替のたびに呼ばれるので CacheService に10分キャッシュ。 */
-function sd_paySums_(ext, monthKey, cfg) {
+/* 複数の月をまとめて集計する（売上シートを読むのは1回だけ）。
+ * 結果は見る人に関係なく「全店舗分」にする。以前は見ている人の担当店舗だけを集計して共通の一時保存に
+ * 入れていたため、委託先が開いた直後の10分間は、他の店舗のレジ実績が欠けることがあった（2026-11-26修正）。 */
+function sd_paySumsMulti_(ext, monthKeys) {
   var sid = ext['売上スプレッドシートID'];
   if (!sid) return null; // 売上シート未設定なら照合しない
   var ss;
@@ -2801,36 +2805,48 @@ function sd_paySums_(ext, monthKey, cfg) {
   var cPay = sd_colLetterToNum_(ext['売上_支払合計列'] || 'S');
   var lastR = sh.getLastRow();
   var width = Math.max(cDate, cStore, cPay);
-  var wanted = {};
-  cfg.forEach(function (st) { wanted[sd_norm_(st.salesName)] = true; });
-  var mDate = sd_monthKeyToDate_(monthKey);
-  var y = mDate.getFullYear(), mo = mDate.getMonth();
-  var sums = {};
+  var out = {};
+  monthKeys.forEach(function (mk) { out[mk] = {}; });
   var CHUNK = 5000;
   for (var start = 2; start <= lastR; start += CHUNK) {
     var n = Math.min(CHUNK, lastR - start + 1);
     var vals = sh.getRange(start, 1, n, width).getValues();
     for (var i = 0; i < vals.length; i++) {
       var dt = vals[i][cDate - 1];
-      if (!(dt instanceof Date) || dt.getFullYear() !== y || dt.getMonth() !== mo) continue;
+      if (!(dt instanceof Date)) continue;
+      var m = dt.getMonth() + 1;
+      var sums = out[dt.getFullYear() + '-' + (m < 10 ? '0' : '') + m];
+      if (!sums) continue;
       var nm = sd_norm_(vals[i][cStore - 1]);
-      if (!wanted[nm]) continue;
+      if (!nm) continue;
       sums[nm] = (sums[nm] || 0) + (Number(vals[i][cPay - 1]) || 0);
     }
   }
-  Object.keys(sums).forEach(function (k) { sums[k] = Math.round(sums[k]); });
-  return sums;
+  monthKeys.forEach(function (mk) { Object.keys(out[mk]).forEach(function (k) { out[mk][k] = Math.round(out[mk][k]); }); });
+  return out;
 }
 
-function sd_paySumsCached_(ext, monthKey, cfg) {
+/* 月ごとの店舗別売上を、実行中のメモ → 10分の一時保存 → 売上シート の順に用意する */
+function sd_loadPaySums_(ext, monthKeys) {
+  var cache = CacheService.getScriptCache(), need = [];
+  monthKeys.forEach(function (mk) {
+    if (SD_ACTUAL_MEMO_[mk] !== undefined) return;
+    var hit = cache.get('sdpay2_' + mk);
+    if (hit) { try { SD_ACTUAL_MEMO_[mk] = JSON.parse(hit); return; } catch (e) { /* 読み直す */ } }
+    if (need.indexOf(mk) < 0) need.push(mk);
+  });
+  if (!need.length) return;
+  var all = ext['売上スプレッドシートID'] ? sd_paySumsMulti_(ext, need) : null;
+  need.forEach(function (mk) {
+    SD_ACTUAL_MEMO_[mk] = all ? all[mk] : null;
+    if (all) { try { cache.put('sdpay2_' + mk, JSON.stringify(all[mk]), 600); } catch (e) { /* 無視 */ } }
+  });
+}
+
+function sd_paySumsCached_(ext, monthKey) {
   if (!ext['売上スプレッドシートID']) return null;
-  var cache = CacheService.getScriptCache();
-  var key = 'sdpay_' + monthKey;
-  var hit = cache.get(key);
-  if (hit) { try { return JSON.parse(hit); } catch (e) { /* 読み直す */ } }
-  var sums = sd_paySums_(ext, monthKey, cfg);
-  if (sums) { try { cache.put(key, JSON.stringify(sums), 600); } catch (e) { /* 無視 */ } }
-  return sums;
+  sd_loadPaySums_(ext, [monthKey]);
+  return SD_ACTUAL_MEMO_[monthKey];
 }
 
 /* ---------- ② PDFプレビュー／メール送信／翌月準備 ---------- */
