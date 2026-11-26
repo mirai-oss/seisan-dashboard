@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.36-dup';
+var SD_VERSION = 'v5.37-migrate3';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -1175,9 +1175,18 @@ function sd_migrateData_(){
   Object.keys(ext).forEach(function (k) { if (k.indexOf('発行元_') === 0 || k === 'メール送信者名') settings[k] = ext[k]; });
 
   var logs = sd_logRows_();
+  // アカウントと利用申請。パスワードは、ここで読めない形にしてから送る（読める形のままは送らない）
+  var accSh = sd_authSheet_(), accounts = [];
+  if (accSh.getLastRow() > 1) accSh.getRange(2, 1, accSh.getLastRow() - 1, 7).getDisplayValues().forEach(function (v) {
+    var id = String(v[0]).trim(); if (!id) return;
+    var pw = String(v[1] || '');
+    accounts.push({ id: id, pwHash: !pw ? '' : (pw.indexOf('sha256$') === 0 ? pw : sd_pwHash_(pw)), name: String(v[2]).trim() || id, role: sd_normRole_(v[3]),
+      stores: String(v[4]).trim(), enabled: sd_norm_(v[5]).toUpperCase() !== 'FALSE', email: String(v[6] || '').trim().toLowerCase() });
+  });
+  var requests = sd_reqRows_().map(function (r) { return { id: r.id, at: r.at, email: r.email, name: r.name, company: r.company, status: r.status, by: r.by, createdId: r.createdId, note: r.note, baseId: r.baseId }; });
   var recurring = sd_recurRows_().map(function (r) { return { store: r.store, kubun: r.kubun, item: r.item, amount: r.amount, tax: r.tax, note: r.note, status: r.status }; });
   return { ver: SD_VERSION, thisMonth: thisM, stores: stores, lines: lines, periods: sd_periodRows_(), recurring: recurring,
-    payments: payments, logs: logs, sales: sales, sheets: sheets, settings: settings, expected: expected };
+    payments: payments, logs: logs, sales: sales, sheets: sheets, settings: settings, expected: expected, accounts: accounts, requests: requests };
 }
 function sd_migrateSync(){
   var h = sd_sessionSupaHeaders_();

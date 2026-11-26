@@ -413,6 +413,8 @@ body.sd-stale #view-input, body.sd-stale #view-settings, body.sd-stale #honbu-to
 var GAS_API_URL = 'https://script.google.com/macros/s/AKfycbzwYN9uSEtcJHSKSVQCoQOrllhO7G6gR-E4dvP-V4o_VdGXr9VQx2mbYYPNyNEFSQCiKg/exec';
 
 var state = { token: localStorage.getItem('sd_token')||'', month:'', data:null };
+/* ログイン用トークンの保存。試験表示（?source=db）のログインは別の場所に置き、いつもの画面に影響させない */
+function saveToken_(t){ localStorage.setItem(DB_MODE?'sd_token_db':'sd_token', t); }
 
 /* ===== ns-portal統合ポータルシェルへの埋め込み対応（W2-A・2026-09-02追加） =====
  * tori-dashboard(app.js)のF-3と全く同じパターン。?embed=1で自画面の見出しを非表示、
@@ -430,6 +432,7 @@ try{
   PENDING_VIEW=q0.get('view')||'';
   DB_MODE=q0.get('source')==='db';
 }catch(e){}
+if(DB_MODE) state.token=localStorage.getItem('sd_token_db')||state.token;
 window.addEventListener('message', function(ev){
   if(ev.origin!=='https://mirai-oss.github.io') return;
   var data=ev.data;
@@ -512,7 +515,25 @@ function apiOnce_(fn){
 // 再試行中はローディング表示中のメッセージへ進捗（n/4）を上書きし、無言で止まって
 // 見える状態（「同期中…」滞留の体感）を防ぐ。
 var API_RETRY_DELAYS_MS = [1000,2000,4000,8000];
+/* 試験表示では、新しい窓口が対応した操作は Supabase へ送る（切り替えまで、書き込みは窓口が断る）。
+ * まだ対応していない操作は、読むだけのものを除いて止める（試験画面から、今のデータを書き換えない） */
+var DB_FNS_=/^sd_(login|googleLogin|supaLogin|requestPasswordReset|resetPassword|requestAccessOptions|requestAccess|addRows|updateRow|deleteRow|bulkAdd|setPaid|listAccessRequests|approveAccess|rejectAccess|saveAccount)$/;
+var DB_PASS_FNS_=/^sd_(listAttachments|getSettings|getOpsSettings|getPdfB64|pdfPreview)$/;
+function dbApi_(fn, args){
+  return fetch(DB_API_URL, { method:'POST', headers:{ 'Content-Type':'application/json', apikey:PERF_LOG_ANON_KEY }, body:JSON.stringify({ fn:fn, args:args }) })
+    .then(function(r){ return r.json(); })
+    .then(function(res){ if(!res.ok) throw new Error(res.error||'不明なエラー'); return res.result; });
+}
 function api(fn){
+  if(DB_MODE){
+    if(DB_FNS_.test(fn)) return dbApi_(fn, Array.prototype.slice.call(arguments,1));
+    // 添付などの読むだけの操作は、まだ今の仕組みから読む（いつもの画面のログインを使う）
+    var legacy=localStorage.getItem('sd_token');
+    var dbMsg='この操作は、試験表示ではまだ使えません。いつもの画面（URLに ?source=db が無いもの）で行ってください';
+    if(!DB_PASS_FNS_.test(fn) || !legacy){ toast('🧪 '+dbMsg); return Promise.reject(new Error(dbMsg)); }
+    return apiOnce_.apply(null, [fn, legacy].concat(Array.prototype.slice.call(arguments,2)))
+      .catch(function(){ throw new Error(dbMsg); }); // いつもの画面のログイン切れで、試験表示のログインを切らない
+  }
   var args = Array.prototype.slice.call(arguments,0);
   function attempt(n){
     return apiOnce_.apply(null, args).catch(function(e){
@@ -530,11 +551,6 @@ function api(fn){
  * 古い行番号や金額のまま登録・修正・振込をしないようにするため。 */
 var STALE_SAFE_FN_=/^sd_(get|list|pdfPreview)/;
 function apiAuth(fn){
-  if(DB_MODE && !STALE_SAFE_FN_.test(fn)){
-    var dbMsg='試験表示では、登録や修正はできません。いつもの画面（URLに ?source=db が無いもの）で行ってください';
-    toast('🧪 '+dbMsg);
-    return Promise.reject(new Error(dbMsg));
-  }
   if(state.stale && !STALE_SAFE_FN_.test(fn)){
     var msg='最新のデータを確認中です。上の案内が消えてから、もう一度お試しください';
     toast('⏳ '+msg);
@@ -629,6 +645,11 @@ function b64ToBlobUrl(b64, mime){
 
 /* ===== ログイン ===== */
 function showLogin(msg){
+  if(DB_MODE){ // 試験表示のログイン切れ・ログアウト。いつもの画面のログインはそのまま
+    state.token=''; localStorage.removeItem('sd_token_db'); state.data=null; loadSeq++; loading(false);
+    document.getElementById('app-view').style.display='none'; document.getElementById('login-view').style.display='block';
+    document.getElementById('login-err').textContent=msg||''; return;
+  }
   if(state.token) snapRpc_('sd_dash_logout', { p_token: state.token }).catch(function(){});
   state.token=''; localStorage.removeItem('sd_token');
   state.data=null; loadSeq++; invalidateCache(); setStale_(false); loading(false); // 前の人の画面を残さない
@@ -643,7 +664,7 @@ function doLogin(){
   loading(true,'ログイン中…');
   api('sd_login', id, pw).then(function(res){
     state.token=res.token;
-    localStorage.setItem('sd_token', res.token);
+    saveToken_(res.token);
     loading(false);
     enterApp_();
   }).catch(function(e){ loading(false); document.getElementById('login-err').textContent=(e.message||e); });
@@ -681,7 +702,7 @@ function trySilentPortalLogin(){
     document.getElementById('login-err').textContent='🐔 ポータルのアカウントでログイン中…';
     return api('sd_supaLogin', at).then(function(res){
       state.token=res.token;
-      localStorage.setItem('sd_token', res.token);
+      saveToken_(res.token);
       document.getElementById('login-err').textContent='';
       enterApp_();
     }).catch(function(){ document.getElementById('login-err').textContent=''; });
@@ -710,7 +731,7 @@ function doSsoLogin(){
     return api('sd_supaLogin', res.j.access_token);
   }).then(function(res){
     state.token=res.token;
-    localStorage.setItem('sd_token', res.token);
+    saveToken_(res.token);
     loading(false);
     enterApp_();
   }).catch(function(e){
@@ -782,7 +803,7 @@ function googleCred_(resp){
     return; }
   loading(true,'Google認証中…');
   api('sd_googleLogin', resp.credential).then(function(res){
-    state.token=res.token; localStorage.setItem('sd_token', res.token); loading(false); enterApp_();
+    state.token=res.token; saveToken_(res.token); loading(false); enterApp_();
   }).catch(function(e){ loading(false); err.textContent=String(e.message||e); });
 }
 function initGoogleLogin_(){
@@ -858,17 +879,16 @@ function loadFromDb_(monthKey){
     .then(function(res){
       if(seq!==loadSeq) return;
       if(!res.ok){
-        if(res.error==='AUTH') throw new Error('ログインを確認できません。いつもの画面を一度開いてから、もう一度お試しください');
+        if(res.error==='AUTH'){ showLogin('ログインを確認できません。もう一度ログインしてください'); return; }
         throw new Error(res.error||'不明なエラー');
       }
       var ms=performance.now()-t0;
       state.data=res.result; state.month=res.result.month;
       render(); loading(false);
-      document.body.classList.add('sd-stale');
       var bar=document.getElementById('stale-bar');
       bar.style.display='flex';
       document.getElementById('stale-retry').style.display='none';
-      document.getElementById('stale-msg').textContent='🧪 試験表示（Supabase）: 表示まで '+(ms/1000).toFixed(1)+'秒 ／ データは '+res.result.updatedAt+' 時点の写し ／ 登録や修正はできません';
+      document.getElementById('stale-msg').textContent='🧪 試験表示（Supabase）: 表示まで '+(ms/1000).toFixed(1)+'秒 ／ データは '+res.result.updatedAt+' 時点の写し ／ 切り替え前のため、登録や修正は反映されません';
       logApiPerf_('db_dashboard', ms, true, '');
     })
     .catch(function(e){ if(seq!==loadSeq) return; loading(false); toast('読み込みエラー: '+(e.message||e)); });
