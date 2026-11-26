@@ -422,11 +422,13 @@ var state = { token: localStorage.getItem('sd_token')||'', month:'', data:null }
  * 受け口）。これによりportal側から精算ダッシュボードへ再訪問した際も既存のdashCache（月別
  * キャッシュ）がそのまま生きた状態で瞬時に表示できる（iframe自体を作り直さない前提）。 */
 var EMBED_MODE=false, PENDING_VIEW='';
+var DB_MODE=false; // 試験表示（?source=db）: 画面のデータをSupabaseから読む。読むだけ
 var SEISAN_VIEWS_=['check','corp','annual','input','settings'];
 try{
   var q0=new URLSearchParams(location.search);
   if(q0.get('embed')==='1') EMBED_MODE=true;
   PENDING_VIEW=q0.get('view')||'';
+  DB_MODE=q0.get('source')==='db';
 }catch(e){}
 window.addEventListener('message', function(ev){
   if(ev.origin!=='https://mirai-oss.github.io') return;
@@ -528,6 +530,11 @@ function api(fn){
  * 古い行番号や金額のまま登録・修正・振込をしないようにするため。 */
 var STALE_SAFE_FN_=/^sd_(get|list|pdfPreview)/;
 function apiAuth(fn){
+  if(DB_MODE && !STALE_SAFE_FN_.test(fn)){
+    var dbMsg='試験表示では、登録や修正はできません。いつもの画面（URLに ?source=db が無いもの）で行ってください';
+    toast('🧪 '+dbMsg);
+    return Promise.reject(new Error(dbMsg));
+  }
   if(state.stale && !STALE_SAFE_FN_.test(fn)){
     var msg='最新のデータを確認中です。上の案内が消えてから、もう一度お試しください';
     toast('⏳ '+msg);
@@ -840,10 +847,38 @@ function setStale_(on, savedAt, failed){
   document.getElementById('stale-retry').style.display=failed?'':'none';
 }
 
+/* ===== 試験表示（移行 段階2・2026-11-26） =====
+ * 写し先(Supabase)のデータで画面を表示し、表示までの秒数を出す。登録・修正はできない。いつもの画面には影響しない。 */
+var DB_API_URL='https://uuvsxzhpxtghojoubjcc.supabase.co/functions/v1/seisan-api';
+function loadFromDb_(monthKey){
+  var seq=++loadSeq, t0=performance.now();
+  loading(true);
+  fetch(DB_API_URL, { method:'POST', headers:{ 'Content-Type':'application/json', apikey:PERF_LOG_ANON_KEY }, body:JSON.stringify({ fn:'sd_getDashboard', args:[state.token, monthKey||null] }) })
+    .then(function(r){ return r.json(); })
+    .then(function(res){
+      if(seq!==loadSeq) return;
+      if(!res.ok){
+        if(res.error==='AUTH') throw new Error('ログインを確認できません。いつもの画面を一度開いてから、もう一度お試しください');
+        throw new Error(res.error||'不明なエラー');
+      }
+      var ms=performance.now()-t0;
+      state.data=res.result; state.month=res.result.month;
+      render(); loading(false);
+      document.body.classList.add('sd-stale');
+      var bar=document.getElementById('stale-bar');
+      bar.style.display='flex';
+      document.getElementById('stale-retry').style.display='none';
+      document.getElementById('stale-msg').textContent='🧪 試験表示（Supabase）: 表示まで '+(ms/1000).toFixed(1)+'秒 ／ データは '+res.result.updatedAt+' 時点の写し ／ 登録や修正はできません';
+      logApiPerf_('db_dashboard', ms, true, '');
+    })
+    .catch(function(e){ if(seq!==loadSeq) return; loading(false); toast('読み込みエラー: '+(e.message||e)); });
+}
+
 var dashCache={};
 var dashCacheAt={}; // 月ごとの取得時刻（背景更新を間引く用・2026-10-20）
 var loadSeq=0;      // 後から始めた読み込みを、先の読み込みの結果で上書きしないための番号
 function loadDashboard(monthKey, force){
+  if(DB_MODE){ loadFromDb_(monthKey); return; }
   var key=monthKey||'__default__';
   var seq=++loadSeq;
   if(force) dashCache={}; // 書き込み後は全月キャッシュを破棄
