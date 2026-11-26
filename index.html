@@ -541,7 +541,7 @@ function apiOnce_(fn){
 var API_RETRY_DELAYS_MS = [1000,2000,4000,8000];
 /* 試験表示では、新しい窓口が対応した操作は Supabase へ送る（切り替えまで、書き込みは窓口が断る）。
  * まだ対応していない操作は、読むだけのものを除いて止める（試験画面から、今のデータを書き換えない） */
-var DB_FNS_=/^sd_(login|googleLogin|supaLogin|requestPasswordReset|resetPassword|requestAccessOptions|requestAccess|addRows|updateRow|deleteRow|bulkAdd|setPaid|listAccessRequests|approveAccess|rejectAccess|saveAccount|getSettings|getOpsSettings|saveTerms|deleteTerms|saveRecurring|saveMail|saveCorp|saveOpsSettings|listAttachments|uploadAttachment|deleteAttachment|getPdfB64|pdfPreview|issueAndSend|prepareMonth|cashPreview|cashApply|setupAutoPrep)$/;
+var DB_FNS_=/^sd_(login|googleLogin|supaLogin|requestPasswordReset|resetPassword|requestAccessOptions|requestAccess|addRows|updateRow|deleteRow|bulkAdd|setPaid|listAccessRequests|approveAccess|rejectAccess|saveAccount|getSettings|getOpsSettings|saveTerms|deleteTerms|saveRecurring|saveMail|saveCorp|saveOpsSettings|listAttachments|uploadAttachment|deleteAttachment|getPdfB64|pdfPreview|issueAndSend|prepareMonth|cashPreview|cashApply|setupAutoPrep|suggestAccount)$/;
 function dbApi_(fn, args){
   return fetch(DB_API_URL, { method:'POST', headers:{ 'Content-Type':'application/json', apikey:PERF_LOG_ANON_KEY }, body:JSON.stringify({ fn:fn, args:args }) })
     .then(function(r){ return r.json(); })
@@ -666,7 +666,9 @@ function b64ToBlobUrl(b64, mime){
 /* ===== ログイン ===== */
 function showLogin(msg){
   closeSheetViewer_();
-  if(DB_MODE){ // 試験表示のログイン切れ・ログアウト。いつもの画面のログインはそのまま
+  if(DB_MODE){ // 新しい仕組みのログイン切れ・ログアウト
+    // 切り替え後は、前の仕組みのログインも消す（残すと、ログアウトしても自動で入ってしまう）。試験表示では残す
+    if(NEW_SYSTEM){ var old=localStorage.getItem('sd_token'); if(old) snapRpc_('sd_dash_logout',{p_token:old}).catch(function(){}); localStorage.removeItem('sd_token'); }
     state.token=''; localStorage.removeItem('sd_token_db'); state.data=null; loadSeq++; loading(false);
     document.getElementById('app-view').style.display='none'; document.getElementById('login-view').style.display='block';
     document.getElementById('login-err').textContent=msg||''; return;
@@ -912,6 +914,7 @@ function loadFromDb_(monthKey){
       document.getElementById('stale-retry').style.display='none';
       if(testing) document.getElementById('stale-msg').textContent='🧪 試験表示（Supabase）: 表示まで '+(ms/1000).toFixed(1)+'秒 ／ データは '+res.result.updatedAt+' 時点の写し ／ 切り替え前のため、登録や修正は反映されません';
       logApiPerf_('db_dashboard', ms, true, '');
+      if(perfOp) perfOpEnd();
     })
     .catch(function(e){ if(seq!==loadSeq) return; loading(false); toast('読み込みエラー: '+(e.message||e)); });
 }

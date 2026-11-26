@@ -15,6 +15,15 @@ const GUESS: [RegExp, string][] = [
 export const guessAccount = (item: unknown) => GUESS.find(([re]) => re.test(String(item ?? '')))?.[1] ?? '';
 const t = (v: unknown) => String(v ?? '').trim();
 
+// 費目名を入れたときの勘定科目の提案（今の sd_suggestAccount と同じ: その店舗で前に使った科目 → 費目名からの推定）
+export function suggestAccount(d: any, store: string, item: string) {
+  const st = d.stores.find((s: any) => s.name === store);
+  const hist = st ? d.lines.filter((l: any) => l.store_key === st.store_key && norm(l.item) === norm(item) && l.account && l.account !== '対象外') : [];
+  if (hist.length) { const last = hist[hist.length - 1]; return { account: last.account, subAccount: last.sub_account || '', source: 'history' }; }
+  const g = guessAccount(item);
+  return { account: g, subAccount: '', source: g ? 'guess' : (st ? 'none' : 'guess') };
+}
+
 export function resolveMapping(d: any, store: string, mfAccount: string, mfSub: string, vendor: string, item: string) {
   if (mfAccount) {
     const rows = d.mappings.filter((r: any) => r.mf_account === mfAccount && (!r.mf_sub || r.mf_sub === mfSub));

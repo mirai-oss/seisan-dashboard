@@ -276,6 +276,10 @@ const AUTHED: Record<string, (u: auth.User, a: any[]) => Promise<unknown>> = {
   sd_approveAccess: (u, a) => auth.approveAccess(deps, u, a[0], a[1]),
   sd_rejectAccess: (u, a) => auth.rejectAccess(deps, u, a[0], a[1]),
   sd_saveAccount: (u, a) => auth.saveAccount(deps, u, a[0]),
+  sd_suggestAccount: async (u, a) => {
+    if (u.role !== "本部" && u.role !== "マスター") throw new auth.AppError("この操作は本部アカウントのみ実行できます");
+    return ext.suggestAccount(await sysData(), String(a[0] ?? ""), String(a[1] ?? ""));
+  },
   sd_prepareMonth: (u, a) => rpc("settle_prepare_month", { actor: actorOf(u), p_month: a[0], p_skip_locked: u.role !== "マスター" }),
   sd_cashPreview: (u, a) => rpc("settle_cash_preview", { actor: actorOf(u), p_month: a[0] }),
   sd_cashApply: (u, a) => rpc("settle_cash_apply", { actor: actorOf(u), p_month: a[0], p_stores: Array.isArray(a[1]) ? a[1] : [], p_skip_existing: false }),
