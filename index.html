@@ -165,6 +165,24 @@
 .stale-bar{display:none;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:20;margin:8px 0;padding:10px 14px;border-radius:10px;background:#fff7e0;color:#7a5200;border:1px solid #f0d68a;font-size:13px;font-weight:700}
 .stale-bar.failed{background:#fdecec;color:#9b1c1c;border-color:#f3b4b4}
 body.sd-stale #view-input, body.sd-stale #view-settings, body.sd-stale #honbu-toolbar{pointer-events:none;opacity:.5}
+/* 精算書の形で添付を見る */
+#sheet-viewer{display:none;position:fixed;inset:0;z-index:60;background:#eceff3;overflow:auto;padding:0 12px 40px}
+.sv-bar{position:sticky;top:0;z-index:2;display:flex;justify-content:space-between;align-items:center;gap:10px;background:#2f3a4d;color:#fff;padding:10px 14px;margin:0 -12px 12px}
+.sv-page{background:#fff;max-width:820px;margin:0 auto 16px;padding:18px 16px;border-radius:8px;box-shadow:0 1px 6px rgba(0,0,0,.1);color:#1a1a1a}
+.sv-page h3{text-align:center;margin:0 0 8px}
+.sv-page h4{background:#2f3a4d;color:#fff;font-size:13px;padding:4px 8px;margin:14px 0 0;border-radius:3px 3px 0 0}
+.sv-to{font-weight:700;border-bottom:1px solid #333;padding-bottom:2px}
+.sv-head{background:#f0f4fb;border:2px solid #2f6fed;border-radius:6px;text-align:center;padding:8px;font-size:12px}
+.sv-head b{display:block;font-size:24px;color:#12336e}
+.sv-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.sv-table th{background:#eef1f5;text-align:left;font-size:11px}
+.sv-table th,.sv-table td{border:1px solid #e3e6ec;padding:4px 6px;vertical-align:top}
+.sv-table .num{text-align:right;white-space:nowrap}
+.sv-table tr.sum td{font-weight:800;background:#f7f9fc}
+.sv-att{border-top:1px solid #e3e6ec;padding:12px 0;scroll-margin-top:60px}
+.sv-att-head{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.sv-att img{display:block;max-width:100%;margin-top:8px;border:1px solid #ddd}
+.sv-att iframe{display:block;width:100%;height:80vh;margin-top:8px;border:1px solid #ddd}
 /* 二重計上の疑い（2026-11-26） */
 .dup-banner{display:none;margin:8px 0;padding:12px 14px;border-radius:10px;background:#fdecec;border:2px solid #dc2626;color:#7f1d1d;font-size:13px}
 .dup-title{font-size:15px;font-weight:800;margin-bottom:6px}
@@ -409,6 +427,7 @@ body.sd-stale #view-input, body.sd-stale #view-settings, body.sd-stale #honbu-to
 </div>
 
 <div id="loading"><div class="spin"></div><span id="loading-msg">読み込み中…</span></div>
+<div id="sheet-viewer"></div>
 <div id="toast"></div>
 
 <script>
@@ -649,6 +668,7 @@ function b64ToBlobUrl(b64, mime){
 
 /* ===== ログイン ===== */
 function showLogin(msg){
+  closeSheetViewer_();
   if(DB_MODE){ // 試験表示のログイン切れ・ログアウト。いつもの画面のログインはそのまま
     state.token=''; localStorage.removeItem('sd_token_db'); state.data=null; loadSeq++; loading(false);
     document.getElementById('app-view').style.display='none'; document.getElementById('login-view').style.display='block';
@@ -1101,7 +1121,8 @@ function renderCards(){
       paidHtml = '<div class="settle-meta">振込済みの登録は「🏢 法人別・振込」タブでまとめて行います</div>';
     }
     var nm = esc(st.name).replace(/'/g,"\\'");
-    var actions='<button class="btn" onclick="openSettlementPreviewStore('+idx+')">👁 精算書プレビュー</button>';
+    var actions='<button class="btn" onclick="openSettlementPreviewStore('+idx+')">👁 精算書プレビュー</button>'
+      +'<button class="btn" onclick="openSheetViewer_('+idx+')">📄 精算書で添付を見る</button>';
     if(honbu){
       actions += (locked
           ? '<button class="btn" disabled title="振込済みのためロック中">＋ 入力</button>'
@@ -1904,6 +1925,88 @@ function testChatwork(){
 
 /* ===== 添付 ===== */
 var attachCtx={store:''};
+/* ===== 精算書の形で添付を見る（2026-11-26） =====
+ * 画面に精算書と同じ並びを出し、各行の「添付」から写真・PDFをその場で見る。添付は精算書の順に下に並ぶ。
+ * 新しい置き場（Supabase）のファイルは画面内に表示し、それ以外（今のGoogleドライブ）は開くリンクを出す。 */
+var SHEET_LINK_TTL_MS=50*60*1000; // 開くリンクは1時間有効。それより前に取り直す
+var sheetView_=null;
+function openSheetViewer_(idx){
+  var st=state.data.stores[idx];
+  loading(true,'精算書と添付を読み込み中…');
+  apiAuth('sd_listAttachments', st.name, state.month).then(function(files){
+    loading(false);
+    sheetView_={store:st.name, month:state.month, at:Date.now()};
+    renderSheetViewer_(st, files||[]);
+  }).catch(function(e){ loading(false); toast('読み込みエラー: '+(e.message||e)); });
+}
+function closeSheetViewer_(){ sheetView_=null; var el=document.getElementById('sheet-viewer'); if(el){ el.style.display='none'; el.innerHTML=''; } document.body.style.overflow=''; }
+/* 精算書の並びと、各行に対応する添付の番号を作る（画面を触らない部分） */
+function buildSheetModel_(st, month, files){
+  var rows=st.detail.rows, used={}, ordered=[];
+  var K=function(r){ return normJ(r.kubun); };
+  var groups=[
+    {title:'売上（預かり金）', rows:rows.filter(function(r){ return K(r)==='売上'; })},
+    {title:'固定調整', rows:rows.filter(function(r){ return K(r)==='固定調整'; })},
+    {title:'固定ロイヤリティ', rows:rows.filter(function(r){ return K(r)==='固定ロイヤリティ'; })},
+    {title:'変動費', rows:rows.filter(function(r){ return ['売上','固定調整','固定ロイヤリティ'].indexOf(K(r))<0; })}
+  ].filter(function(g){ return g.rows.length; });
+  groups.forEach(function(g){
+    g.lines=g.rows.map(function(r){
+      var nums=matchAttachFiles(r.item, month, st.name, files, r, rows).map(function(f){
+        var key=String(f.id);
+        if(!used[key]){ ordered.push(f); used[key]=ordered.length; }
+        return used[key];
+      });
+      return {row:r, nums:nums};
+    });
+  });
+  var matched=ordered.length;
+  files.forEach(function(f){ if(!used[String(f.id)]){ ordered.push(f); used[String(f.id)]=ordered.length; } });
+  return {groups:groups, files:ordered, matched:matched};
+}
+function attachPreviewHtml_(f){
+  var url=String(f.url||''), name=String(f.name||''), inline=url.indexOf('/storage/v1/')>-1;
+  var open='<a class="btn sm" href="'+esc(url)+'" target="_blank" rel="noopener">別のタブで開く ↗</a>';
+  if(inline && /\.(jpe?g|png|gif|webp)$/i.test(name)) return open+'<img loading="lazy" src="'+esc(url)+'" alt="'+esc(name)+'">';
+  if(inline && /\.pdf$/i.test(name)) return open+'<iframe loading="lazy" src="'+esc(url)+'" title="'+esc(name)+'"></iframe>';
+  return open+'<p class="muted">この形式は画面内に表示できません。ボタンから開いてください。</p>';
+}
+function renderSheetViewer_(st, files){
+  var el=document.getElementById('sheet-viewer'), m=buildSheetModel_(st, sheetView_.month, files), se=st.detail.settle, f=st.fixed||{};
+  var money=function(label,v,cls){ return '<tr'+(cls?' class="'+cls+'"':'')+'><td>'+label+'</td><td class="num">'+yen(v)+'</td></tr>'; };
+  var lines=m.groups.map(function(g){
+    return '<h4>'+esc(g.title)+'</h4><table class="sv-table"><tr><th>費目名</th><th class="num">金額（税込）</th><th>税率</th><th>備考</th><th>添付</th></tr>'
+      +g.lines.map(function(l){
+        return '<tr><td>'+esc(l.row.item)+'</td><td class="num">'+yen(l.row.amount)+'</td><td>'+esc(l.row.tax)+'</td><td>'+esc(l.row.note||'')+'</td><td>'
+          +(l.nums.length?l.nums.map(function(n){ return '<button class="btn sm" onclick="jumpAttach_('+n+')">📎'+n+'</button>'; }).join(' '):'<span class="muted">－</span>')+'</td></tr>';
+      }).join('')+'</table>';
+  }).join('');
+  var fixed='<h4>固定経費</h4><table class="sv-table">'+(f.rent?money('家賃',f.rent):'')+(f.ins?money('物件保険料',f.ins):'')+(f.sss?money('SSS経理処理手数料',f.sss):'')+(f.f4?money('固定④',f.f4):'')+(f.f5?money('固定⑤',f.f5):'')+money('固定経費 小計',se.fixedSub,'sum')+'</table>';
+  var total='<h4>精算集計</h4><table class="sv-table">'+money('売上（預かり金）',se.sales)+money('固定経費 小計',se.fixedSub)+money('変動費 合計',se.varCost)+money('固定ロイヤリティ',se.royF)
+    +money('ロイヤリティ（変動 '+esc(st.rate)+'）',se.royV)+money('経費合計',se.costTotal)+money('業務委託費（税抜）',se.transferEx)+money('消費税（10%）',se.tax)+money('振込金額（税込）',se.transfer,'sum')+'</table>';
+  var atts=m.files.map(function(a,i){
+    return (i===m.matched?'<h4>そのほかの添付（明細の行に対応しないもの）</h4>':'')
+      +'<div class="sv-att" id="sv-att-'+(i+1)+'"><div class="sv-att-head"><b>📎'+(i+1)+'　'+esc(a.name)+'</b><button class="btn sm" onclick="document.getElementById(\'sheet-viewer\').scrollTop=0">↑ 精算書へ戻る</button></div>'+attachPreviewHtml_(a)+'</div>';
+  }).join('');
+  el.innerHTML='<div class="sv-bar"><b>'+esc(st.name)+'　'+esc(mLabel(sheetView_.month))+'分</b><button class="btn primary sm" onclick="closeSheetViewer_()">✕ 閉じる</button></div>'
+    +'<div class="sv-page"><h3>業 務 委 託 精 算 書</h3><p class="sv-to">'+esc(st.client||'')+'　御中</p>'
+    +'<div class="sv-head">業務委託費（消費税込）　振込金額<b>'+(se.hasSales?yen(se.transfer):'未確定')+'</b></div>'
+    +lines+fixed+total
+    +'<p class="muted">発行済みの精算書（PDF）は「👁 精算書プレビュー」で確認できます。ここは最新の入力内容の表示です。</p></div>'
+    +'<div class="sv-page"><h3>添付書類（精算書の順）</h3>'+(atts||'<p class="muted">この月の添付はまだありません</p>')+'</div>';
+  el.style.display='block'; el.scrollTop=0; document.body.style.overflow='hidden';
+}
+function jumpAttach_(n){
+  var go=function(){ var t=document.getElementById('sv-att-'+n); if(t&&t.scrollIntoView) t.scrollIntoView({behavior:'smooth',block:'start'}); };
+  if(sheetView_ && Date.now()-sheetView_.at>SHEET_LINK_TTL_MS){ // 長く開いたままのときは、リンクを取り直してから移動する
+    var v=sheetView_;
+    var st=state.data.stores.filter(function(s){ return s.name===v.store; })[0];
+    if(!st || state.month!==v.month){ closeSheetViewer_(); toast('画面が切り替わったため閉じました。もう一度開いてください'); return; }
+    apiAuth('sd_listAttachments', v.store, v.month).then(function(files){ v.at=Date.now(); renderSheetViewer_(st, files||[]); go(); }).catch(function(e){ toast('リンクの更新エラー: '+(e.message||e)); });
+    return;
+  }
+  go();
+}
 function openAttach(storeIdx){
   var st=state.data.stores[storeIdx];
   attachCtx.store=st.name;
