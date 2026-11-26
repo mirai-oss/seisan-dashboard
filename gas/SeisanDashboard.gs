@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.37-migrate3';
+var SD_VERSION = 'v5.38-files';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -1197,6 +1197,65 @@ function sd_migrateSync(){
   });
   if (res.getResponseCode() >= 300) throw new Error('取り込みに失敗（' + res.getResponseCode() + '）: ' + String(res.getContentText()).slice(0, 300));
   Logger.log('移行データの取り込み: ' + res.getContentText() + '／' + Math.round((Date.now() - t0) / 1000) + '秒');
+  sd_migrateFiles();
+}
+/* 添付と発行PDFを、ドライブから Supabase へ写す（ドライブは読むだけ・フォルダも作らない）。
+ * 1回で終わらなければ、もう一度実行すると続きから写す。 */
+var SD_FILES_LIMIT_MS = 240000;
+function sd_driveFiles_(){
+  var ext = sd_extConfig_(), det = sd_detect_();
+  var cfg = sd_config_(sd_masterStores_(det), det);
+  var parent = DriveApp.getFolderById(ext['添付親フォルダID']);
+  var months = sd_monthList_(sd_thisMonthKey_()), out = [];
+  months.forEach(function (mk) {
+    var mf = parent.getFoldersByName(sd_monthLabel_(mk));
+    while (mf.hasNext()) {
+      var monthFolder = mf.next();
+      cfg.forEach(function (st) {
+        var sf = monthFolder.getFoldersByName(st.name);
+        while (sf.hasNext()) {
+          var it = sf.next().getFiles();
+          while (it.hasNext()) out.push({ store: st.name, month: mk, file: it.next() });
+        }
+      });
+    }
+  });
+  return out;
+}
+function sd_migrateFiles(){
+  var h = sd_sessionSupaHeaders_();
+  if (!h) throw new Error('SUPABASE_URL / SUPABASE_SERVICE_KEY が未設定です');
+  var t0 = Date.now();
+  function rpc(name, body) {
+    var r = UrlFetchApp.fetch(h.url + '/rest/v1/rpc/' + name, { method: 'post', headers: h.headers, muteHttpExceptions: true, payload: JSON.stringify(body) });
+    if (r.getResponseCode() >= 300) throw new Error(name + ' 失敗（' + r.getResponseCode() + '）: ' + String(r.getContentText()).slice(0, 200));
+    return r.getContentText() ? JSON.parse(r.getContentText()) : null;
+  }
+  var have = {};
+  rpc('settle_drive_ids', {}).forEach(function (id) { have[id] = true; });
+  var all = sd_driveFiles_(), copied = 0, failed = [], left = 0;
+  all.forEach(function (x) {
+    var id = x.file.getId();
+    if (have[id]) return;
+    if (Date.now() - t0 > SD_FILES_LIMIT_MS) { left++; return; }
+    try {
+      if (x.file.getSize() > 30 * 1024 * 1024) { failed.push(x.file.getName() + '（30MB超）'); return; }
+      var blob = x.file.getBlob(), name = x.file.getName();
+      var m = name.match(/\.[A-Za-z0-9]{1,8}$/);
+      var path = 'drive/' + x.month + '/' + id + (m ? m[0].toLowerCase() : '');
+      var up = UrlFetchApp.fetch(h.url + '/storage/v1/object/settle-files/' + path, {
+        method: 'post', muteHttpExceptions: true, contentType: blob.getContentType() || 'application/octet-stream',
+        headers: { apikey: h.headers.apikey, Authorization: h.headers.Authorization, 'x-upsert': 'true' }, payload: blob.getBytes()
+      });
+      if (up.getResponseCode() >= 300) { failed.push(name + '（' + up.getResponseCode() + '）'); return; }
+      rpc('settle_file_register', { p: { store: x.store, month: x.month, name: name, path: path, mime: blob.getContentType(), size: x.file.getSize(),
+        driveId: id, createdAt: x.file.getDateCreated().toISOString() } });
+      copied++;
+    } catch (e) { failed.push(x.file.getName() + '（' + String(e.message || e).slice(0, 80) + '）'); }
+  });
+  var pruned = rpc('settle_file_prune', { p_ids: all.map(function (x) { return x.file.getId(); }) });
+  Logger.log('添付の写し: ドライブ' + all.length + '件／今回写した' + copied + '件／残り' + left + '件／失敗' + failed.length + '件／削除の反映' + pruned + '件'
+    + (failed.length ? '\n失敗: ' + failed.slice(0, 10).join('、') : ''));
 }
 function sd_setupMigrateSync(){
   sd_stopMigrateSync();

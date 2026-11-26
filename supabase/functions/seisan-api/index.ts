@@ -6,6 +6,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { buildDashboard } from "./dashboard.ts";
 import * as auth from "./auth.ts";
 import { buildSettings } from "./settings.ts";
+import * as files from "./files.ts";
 import { supaStore } from "./store.ts";
 
 const ORIGIN = "https://mirai-oss.github.io";
@@ -45,6 +46,8 @@ const PUBLIC: Record<string, (a: any[]) => Promise<unknown>> = {
 };
 
 class DbError extends auth.AppError {}
+const bucket = () => db.storage.from("settle-files");
+const monthLabel = (m: string) => `${Number(m.slice(0, 4))}年${Number(m.slice(5, 7))}月`;
 async function rpc(name: string, args: Record<string, unknown>) {
   const { data, error } = await db.rpc(name, args);
   if (!error) return data;
@@ -68,6 +71,24 @@ const AUTHED: Record<string, (u: auth.User, a: any[]) => Promise<unknown>> = {
   sd_approveAccess: (u, a) => auth.approveAccess(deps, u, a[0], a[1]),
   sd_rejectAccess: (u, a) => auth.rejectAccess(deps, u, a[0], a[1]),
   sd_saveAccount: (u, a) => auth.saveAccount(deps, u, a[0]),
+  sd_uploadAttachment: async (u, a) => { // a = [{ store, month, kind, fileName, mimeType, b64, revised }]
+    const p: any = a[0] ?? {};
+    const t: any = await rpc("settle_file_target", { actor: u, p_store: p.store, p_month: p.month });
+    const bytes = files.decodeB64(p.b64);
+    if (!bytes) throw new auth.AppError("ファイルが読めないか、大きすぎます（25MBまで）");
+    const n = files.attachmentName(p.kind, p.month, p.store, p.fileName, !!p.revised, t.names);
+    if (!n.kind) throw new auth.AppError("何の書類か（例: カード売上）を入力してください");
+    const path = `files/${p.month}/${crypto.randomUUID()}${n.ext.toLowerCase()}`;
+    const mime = files.safeMime(p.mimeType);
+    const up = await bucket().upload(path, bytes, { contentType: mime });
+    if (up.error) throw new Error("storage");
+    const ins = await db.from("settle_attachments").insert({ store_key: t.key, month: p.month, file_name: n.name, storage_path: path, mime, size_bytes: bytes.length, uploaded_by: u.name });
+    if (ins.error) { await bucket().remove([path]); throw new Error("database"); }
+    await db.from("settle_audit").insert({ actor: u.name, action: p.revised ? "添付（修正版）" : "添付アップロード", store_key: t.key, month: p.month, after: { name: n.name } });
+    const signed = await bucket().createSignedUrl(path, 3600);
+    return { ok: true, name: n.name, url: signed.data?.signedUrl ?? "", folder: monthLabel(p.month) + "／" + p.store };
+  },
+  sd_deleteAttachment: (u, a) => rpc("settle_file_delete", { actor: u, p_store: a[0], p_month: a[1], p_id: String(a[2] ?? "") }),
   sd_saveTerms: (u, a) => rpc("settle_save_terms", { actor: u, p: a[0] }),
   sd_deleteTerms: (u, a) => rpc("settle_delete_terms", { actor: u, p: a[0] }),
   sd_saveRecurring: (u, a) => rpc("settle_save_recurring", { actor: u, p: a[0] }),
@@ -85,7 +106,7 @@ Deno.serve(async (req: Request) => {
   const t0 = Date.now();
   try {
     if (Object.hasOwn(PUBLIC, fn)) return json({ ok: true, result: await PUBLIC[fn](args) });
-    const READS = ["sd_getDashboard", "sd_getSettings", "sd_getOpsSettings"];
+    const READS = ["sd_getDashboard", "sd_getSettings", "sd_getOpsSettings", "sd_listAttachments", "sd_getPdfB64"];
     if (!READS.includes(fn) && !Object.hasOwn(AUTHED, fn)) return json({ ok: false, error: "この機能は、移行の次の段階で使えるようになります" });
     const [token, ...rest] = args;
     if (typeof token !== "string" || token.length < 32) return json({ ok: false, error: "AUTH" }, 401);
@@ -109,6 +130,23 @@ Deno.serve(async (req: Request) => {
       if (!d) return json({ ok: false, error: "AUTH" }, 401);
       if (d.forbidden) return json({ ok: false, error: "この操作は本部アカウントのみ実行できます" });
       return json({ ok: true, result: fn === "sd_getOpsSettings" ? { ok: true, ...d.ops } : buildSettings(d, jst(new Date()).slice(0, 7)) });
+    }
+
+    if (fn === "sd_listAttachments") { // [店舗, 月]
+      const list: any = await rpc("settle_file_list", { p_token: token, p_store: String(rest[0] ?? ""), p_month: String(rest[1] ?? "") });
+      if (!list) return json({ ok: false, error: "AUTH" }, 401);
+      if (!list.length) return json({ ok: true, result: [] });
+      const signed = await bucket().createSignedUrls(list.map((f: any) => f.path), 3600); // 1時間だけ開けるリンク
+      if (signed.error) throw new Error("storage");
+      const url = new Map(signed.data.map((s: any) => [s.path, s.signedUrl]));
+      return json({ ok: true, result: list.map((f: any) => ({ id: f.id, name: f.name, date: f.date, url: url.get(f.path) ?? "" })) });
+    }
+    if (fn === "sd_getPdfB64") {
+      const f: any = await rpc("settle_file_get", { p_token: token, p_file: String(rest[0] ?? "") });
+      if (!f) return json({ ok: false, error: "AUTH" }, 401);
+      const dl = await bucket().download(f.path);
+      if (dl.error) throw new Error("storage");
+      return json({ ok: true, result: { fileName: f.name, b64: files.encodeB64(new Uint8Array(await dl.data.arrayBuffer())) } });
     }
 
     const user: any = await rpc("settle_whoami", { p_token: token });
