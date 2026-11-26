@@ -352,6 +352,10 @@ body.sd-stale #view-input, body.sd-stale #view-settings, body.sd-stale #honbu-to
           <h3>🔁 定期費目</h3><p>毎月自動で作る費目（「毎月」⇄「停止」の切替が即保存されます）</p>
           <div id="recur-settings-list"></div>
         </div>
+        <div class="settle-setting" id="mail-card" style="display:none">
+          <h3>✉ 精算書メールの宛先</h3><p>店舗ごとの宛先（To・CC）と件名・本文</p>
+          <div id="mail-settings-list"></div>
+        </div>
         <div class="settle-setting">
           <h3>⚙ 自動処理・権限</h3><p>締め・ロック・メール送信の既定</p>
           <div class="settle-setting-row"><strong>毎月の自動処理</strong><span class="muted">上のツールバーの「🕘 毎月の自動処理をON」で設定します</span></div>
@@ -517,8 +521,8 @@ function apiOnce_(fn){
 var API_RETRY_DELAYS_MS = [1000,2000,4000,8000];
 /* 試験表示では、新しい窓口が対応した操作は Supabase へ送る（切り替えまで、書き込みは窓口が断る）。
  * まだ対応していない操作は、読むだけのものを除いて止める（試験画面から、今のデータを書き換えない） */
-var DB_FNS_=/^sd_(login|googleLogin|supaLogin|requestPasswordReset|resetPassword|requestAccessOptions|requestAccess|addRows|updateRow|deleteRow|bulkAdd|setPaid|listAccessRequests|approveAccess|rejectAccess|saveAccount)$/;
-var DB_PASS_FNS_=/^sd_(listAttachments|getSettings|getOpsSettings|getPdfB64|pdfPreview)$/;
+var DB_FNS_=/^sd_(login|googleLogin|supaLogin|requestPasswordReset|resetPassword|requestAccessOptions|requestAccess|addRows|updateRow|deleteRow|bulkAdd|setPaid|listAccessRequests|approveAccess|rejectAccess|saveAccount|getSettings|getOpsSettings|saveTerms|deleteTerms|saveRecurring|saveMail|saveCorp|saveOpsSettings)$/;
+var DB_PASS_FNS_=/^sd_(listAttachments|getPdfB64|pdfPreview)$/;
 function dbApi_(fn, args){
   return fetch(DB_API_URL, { method:'POST', headers:{ 'Content-Type':'application/json', apikey:PERF_LOG_ANON_KEY }, body:JSON.stringify({ fn:fn, args:args }) })
     .then(function(r){ return r.json(); })
@@ -2169,6 +2173,8 @@ function renderSettings(){
   lockSel.disabled=masterOnly; sendSel.disabled=masterOnly;
   document.getElementById('ops-master-note').style.display=masterOnly?'':'none';
 
+  if(DB_MODE) renderDbSettings_(s);
+
   // 👤 アカウント
   document.getElementById('acct-table').innerHTML=
     '<tr><th>ログインID</th><th>表示名</th><th>権限</th><th>担当店舗</th><th>有効</th><th></th></tr>'
@@ -2281,6 +2287,86 @@ function saveAccount(){
     toast('✅ アカウント「'+res.id+'」を'+(res.updated?'更新':'追加')+'しました');
     loadSettings();
   }).catch(function(e){ loading(false); toast('保存エラー: '+(e.message||e)); });
+}
+/* ===== 新しい仕組みの設定（試験表示）: 適用開始月つきの率・固定費、定期費目、メール ===== */
+var TERM_FIELDS_=[['rate','変動ロイヤリティ率（%）'],['rent','家賃'],['ins','物件保険'],['sss','経理手数料'],['f4','固定④'],['f5','固定⑤']];
+function termsLine_(t){ return '率 '+esc(t.rate)+' ／ 家賃 '+yen(t.rent)+' ／ 物件保険 '+yen(t.ins)+' ／ 経理手数料 '+yen(t.sss)+(t.f4?' ／ 固定④ '+yen(t.f4):'')+(t.f5?' ／ 固定⑤ '+yen(t.f5):''); }
+function renderDbSettings_(s){
+  var master=isMaster();
+  var rate=document.getElementById('rate-settings-list'), card=rate.parentElement;
+  card.querySelector('h3').textContent='💹 ロイヤリティ率・固定費';
+  card.querySelector('p').textContent='変えるときは適用開始月を選びます。開始月より前の月の金額は変わりません（変更はマスターのみ）';
+  rate.innerHTML=s.stores.map(function(st,i){
+    return '<div style="border-top:1px solid #eee;padding:8px 0"><div class="settle-setting-row"><strong>'+esc(st.name)+'</strong><button class="btn sm" onclick="openTermsModal_('+i+')"'+(master?'':' disabled')+'>変更</button></div>'
+      +'<div class="muted">今の条件: '+termsLine_(st.current)+'</div>'
+      +st.terms.map(function(t){ return '<div class="muted">└ '+esc(mLabel(t.from))+'分から: '+termsLine_(t)+(master?' <button class="settle-editbtn" onclick="deleteTerms_('+t.id+',\''+esc(t.from)+'\')">取り消し</button>':'')+'</div>'; }).join('')
+      +'</div>';
+  }).join('');
+  var rl=document.getElementById('recur-settings-list'), rc=rl.parentElement;
+  rc.querySelector('p').textContent='毎月自動で作る費目。追加・金額の変更・停止ができます';
+  rl.innerHTML=(s.recur.length?s.recur.map(function(r,i){
+      return '<div class="settle-setting-row"><strong>'+esc(r.store)+' / '+esc(r.item)+'</strong><span class="muted">'+yen(r.amount)+'　'+(r.status==='停止'?'停止中':'毎月')+(r.startMonth?'　'+esc(r.startMonth)+'から':'')+(r.endMonth?'　'+esc(r.endMonth)+'まで':'')+'</span><button class="btn sm" onclick="openRecurModal_('+i+')">編集</button></div>';
+    }).join(''):'<p class="muted">定期費目はまだありません</p>')
+    +'<button class="btn primary sm" onclick="openRecurModal_(-1)">＋ 定期費目を追加</button>';
+  document.getElementById('mail-card').style.display='';
+  document.getElementById('mail-settings-list').innerHTML=s.stores.map(function(st,i){
+    return '<div class="settle-setting-row"><strong>'+esc(st.name)+'</strong><span class="muted">'+(st.mail.to?esc(st.mail.to):'宛先 未登録')+'</span><button class="btn sm" onclick="openMailModal_('+i+')">編集</button></div>';
+  }).join('');
+}
+function field_(id,label,value,extra){ return '<div><label>'+label+'</label><input id="'+id+'" value="'+esc(value==null?'':value)+'" '+(extra||'')+'></div>'; }
+function select_(id,label,list,value){ return '<div><label>'+label+'</label><select id="'+id+'">'+list.map(function(o){ return '<option'+(o===value?' selected':'')+'>'+esc(o)+'</option>'; }).join('')+'</select></div>'; }
+function val_(id){ return document.getElementById(id).value.trim(); }
+function grid_(cols, html){ return '<div class="settle-entry-top" style="grid-template-columns:'+cols+'">'+html+'</div>'; }
+function saveSetting_(fn, payload, done){
+  loading(true,'保存中…');
+  apiAuth(fn, payload).then(function(){ loading(false); closeModal(); toast('✅ '+done); loadSettings(); loadDashboard(state.month,true); })
+    .catch(function(e){ loading(false); toast('保存できません: '+(e.message||e)); });
+}
+function openTermsModal_(i){
+  var st=settingsCache.stores[i], c=st.current;
+  var body='<p class="muted">'+esc(st.name)+'　今の条件を入れた状態です。変える項目だけ直してください。</p>'
+    +grid_('1fr','<div><label>適用開始月（この月の分から変わります）</label><input type="month" id="tm-from"></div>')
+    +grid_('1fr 1fr 1fr',TERM_FIELDS_.map(function(f){ return field_('tm-'+f[0], f[1], f[0]==='rate'?String(c.rate).replace(/[%％]/g,''):c[f[0]], 'inputmode="decimal"'); }).join(''));
+  openModal('💹 ロイヤリティ率・固定費の変更', body, '<button class="btn primary" onclick="saveTerms_('+i+')">内容を確認して保存</button><button class="btn" onclick="closeModal()">閉じる</button>');
+}
+function saveTerms_(i){
+  var st=settingsCache.stores[i], p={store:st.name, from:val_('tm-from')};
+  if(!p.from){ toast('適用開始月を選んでください'); return; }
+  TERM_FIELDS_.forEach(function(f){ p[f[0]]=val_('tm-'+f[0]); });
+  if(!confirm(st.name+'\n'+mLabel(p.from)+'分から、次の条件に変わります（それより前の月は変わりません）。\n\n'+TERM_FIELDS_.map(function(f){ return f[1]+': '+(p[f[0]]||0); }).join('\n')+'\n\n保存しますか？')) return;
+  saveSetting_('sd_saveTerms', p, st.name+' の条件を保存しました');
+}
+function deleteTerms_(id, from){
+  if(!confirm(mLabel(from)+'分からの設定を取り消します。その月以降は、一つ前の条件に戻ります。よろしいですか？')) return;
+  saveSetting_('sd_deleteTerms', {id:id}, '設定を取り消しました');
+}
+function openRecurModal_(i){
+  var r=i>=0?settingsCache.recur[i]:{store:settingsCache.stores[0].name,kubun:'変動費',item:'',amount:'',tax:'10%',note:'',status:'有効',startMonth:'',endMonth:''};
+  var d=state.data;
+  var body=grid_('1fr 1fr',select_('rc-store','店舗',settingsCache.stores.map(function(s){return s.name;}),r.store)+select_('rc-kubun','区分',d.kubunOptions,r.kubun))
+    +grid_('2fr 1fr 1fr',field_('rc-item','費目名',r.item)+field_('rc-amount','金額（税込）',r.amount,'inputmode="numeric"')+select_('rc-tax','税率',d.taxOptions,r.tax))
+    +grid_('1fr 1fr 1fr',select_('rc-status','状態',['有効','停止'],r.status)+'<div><label>開始月（任意）</label><input type="month" id="rc-start" value="'+esc(r.startMonth)+'"></div><div><label>終了月（任意）</label><input type="month" id="rc-end" value="'+esc(r.endMonth)+'"></div>')
+    +grid_('1fr',field_('rc-note','備考',r.note));
+  openModal(i>=0?'🔁 定期費目の編集':'🔁 定期費目の追加', body, '<button class="btn primary" onclick="saveRecur_('+i+')">保存</button>'
+    +(i>=0?'<button class="btn" onclick="deleteRecur_('+i+')">削除</button>':'')+'<button class="btn" onclick="closeModal()">閉じる</button>');
+}
+function saveRecur_(i){
+  saveSetting_('sd_saveRecurring', {id:i>=0?settingsCache.recur[i].id:'', store:val_('rc-store'), kubun:val_('rc-kubun'), item:val_('rc-item'), amount:val_('rc-amount'), tax:val_('rc-tax'), status:val_('rc-status'), startMonth:val_('rc-start'), endMonth:val_('rc-end'), note:val_('rc-note')}, '定期費目を保存しました');
+}
+function deleteRecur_(i){
+  var r=settingsCache.recur[i];
+  if(!confirm(r.store+' の定期費目「'+r.item+'」を削除します。すでに登録した明細は消えません。よろしいですか？')) return;
+  saveSetting_('sd_saveRecurring', {id:r.id, delete:true}, '定期費目を削除しました');
+}
+function openMailModal_(i){
+  var st=settingsCache.stores[i], m=st.mail;
+  var body='<p class="muted">'+esc(st.name)+'　件名と本文の「〇月」は、送るときに対象月に置き換わります。複数の宛先はカンマで区切ります。</p>'
+    +grid_('1fr',field_('ml-to','宛先（To）',m.to))+grid_('1fr',field_('ml-cc','CC',m.cc))+grid_('1fr',field_('ml-subject','件名',m.subject))
+    +grid_('1fr','<div><label>本文</label><textarea id="ml-body" rows="8" style="width:100%">'+esc(m.body)+'</textarea></div>');
+  openModal('✉ 精算書メールの設定', body, '<button class="btn primary" onclick="saveMail_('+i+')">保存</button><button class="btn" onclick="closeModal()">閉じる</button>');
+}
+function saveMail_(i){
+  saveSetting_('sd_saveMail', {store:settingsCache.stores[i].name, to:val_('ml-to'), cc:val_('ml-cc'), subject:val_('ml-subject'), body:document.getElementById('ml-body').value}, 'メール設定を保存しました');
 }
 function openCorpModal(idx){
   var c=settingsCache.corps[idx];

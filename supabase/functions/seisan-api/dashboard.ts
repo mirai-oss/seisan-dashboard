@@ -35,8 +35,16 @@ export function monthList(anchor: string, thisMonth: string) {
 export type User = { name: string; role: string; storesRaw?: string };
 export type Data = {
   stores: any[]; periods: any[]; lines: any[]; payments: any[]; logs: any[]; sales: any[];
-  corpRows: string[][]; thisMonth: string;
+  corpRows: string[][]; thisMonth: string; terms?: any[];
 };
+
+// 対象月の条件（率・固定費）。適用開始月つきの設定があれば、その月に有効な最も新しいもの。無ければ店舗の元の値
+const TERM_KEYS = ['rate_text', 'rate_pct', 'rent', 'insurance', 'accounting_fee', 'fixed4', 'fixed5'] as const;
+export function termsAt(st: any, month: string, terms: any[] = []) {
+  let best: any = null;
+  for (const t of terms) if (t.store_key === st.store_key && t.from_month <= month && (!best || t.from_month > best.from_month)) best = t;
+  return best ? { ...st, ...Object.fromEntries(TERM_KEYS.map((k) => [k, best[k]])) } : st;
+}
 
 export function allowedStores(user: User, stores: any[]) {
   if (user.role === '本部' || norm(user.storesRaw) === '全店' || !user.storesRaw) return stores;
@@ -182,7 +190,7 @@ export function buildDashboard(data: Data, user: User, monthKey: string | null) 
       const v = Number(sales.get(mk + '|' + norm(st.sales_name))?.pay_total ?? 0);
       return v > 0 ? v : null;
     };
-    const settleFor = (mk: string) => settle(byMonth[mk] || [], mk, st, register(mk));
+    const settleFor = (mk: string) => settle(byMonth[mk] || [], mk, termsAt(st, mk, data.terms), register(mk));
     const paidFor = (mk: string) => {
       const client = clientAt(st, mk, data.periods);
       const byClient = paidAll[norm(client || NO_CLIENT)] || {};
@@ -215,12 +223,13 @@ export function buildDashboard(data: Data, user: User, monthKey: string | null) 
     const issued: Record<string, boolean> = st.issued || {};
     const client = clientAt(st, month, data.periods);
     clients.add(norm(client));
+    const cur = termsAt(st, month, data.terms);
     return {
       suspects: isHq ? dupSuspects(rows, (mk) => !!paidFor(mk)?.done) : [],
-      name: st.name, client, rate: st.rate_text ?? '',
+      name: st.name, client, rate: cur.rate_text ?? '',
       fixed: {
-        rent: Number(st.rent), ins: Number(st.insurance), sss: Number(st.accounting_fee), f4: Number(st.fixed4), f5: Number(st.fixed5),
-        total: ['rent', 'insurance', 'accounting_fee', 'fixed4', 'fixed5'].reduce((a, k) => a + Number(st[k] || 0), 0),
+        rent: Number(cur.rent), ins: Number(cur.insurance), sss: Number(cur.accounting_fee), f4: Number(cur.fixed4), f5: Number(cur.fixed5),
+        total: ['rent', 'insurance', 'accounting_fee', 'fixed4', 'fixed5'].reduce((a, k) => a + Number(cur[k] || 0), 0),
       },
       dbSheet: st.db_sheet ?? '', hasDb: !!st.db_sheet, matrix, issued,
       detail: {

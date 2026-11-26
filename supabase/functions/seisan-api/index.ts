@@ -5,6 +5,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { buildDashboard } from "./dashboard.ts";
 import * as auth from "./auth.ts";
+import { buildSettings } from "./settings.ts";
 import { supaStore } from "./store.ts";
 
 const ORIGIN = "https://mirai-oss.github.io";
@@ -67,6 +68,12 @@ const AUTHED: Record<string, (u: auth.User, a: any[]) => Promise<unknown>> = {
   sd_approveAccess: (u, a) => auth.approveAccess(deps, u, a[0], a[1]),
   sd_rejectAccess: (u, a) => auth.rejectAccess(deps, u, a[0], a[1]),
   sd_saveAccount: (u, a) => auth.saveAccount(deps, u, a[0]),
+  sd_saveTerms: (u, a) => rpc("settle_save_terms", { actor: u, p: a[0] }),
+  sd_deleteTerms: (u, a) => rpc("settle_delete_terms", { actor: u, p: a[0] }),
+  sd_saveRecurring: (u, a) => rpc("settle_save_recurring", { actor: u, p: a[0] }),
+  sd_saveMail: (u, a) => rpc("settle_save_mail", { actor: u, p: a[0] }),
+  sd_saveCorp: (u, a) => rpc("settle_save_corp", { actor: u, p: a[0] }),
+  sd_saveOpsSettings: (u, a) => rpc("settle_save_ops", { actor: u, p: a[0] }),
 };
 
 Deno.serve(async (req: Request) => {
@@ -78,7 +85,8 @@ Deno.serve(async (req: Request) => {
   const t0 = Date.now();
   try {
     if (Object.hasOwn(PUBLIC, fn)) return json({ ok: true, result: await PUBLIC[fn](args) });
-    if (fn !== "sd_getDashboard" && !Object.hasOwn(AUTHED, fn)) return json({ ok: false, error: "この機能は、移行の次の段階で使えるようになります" });
+    const READS = ["sd_getDashboard", "sd_getSettings", "sd_getOpsSettings"];
+    if (!READS.includes(fn) && !Object.hasOwn(AUTHED, fn)) return json({ ok: false, error: "この機能は、移行の次の段階で使えるようになります" });
     const [token, ...rest] = args;
     if (typeof token !== "string" || token.length < 32) return json({ ok: false, error: "AUTH" }, 401);
 
@@ -94,6 +102,13 @@ Deno.serve(async (req: Request) => {
       result.updatedAt = jst(new Date(data.importedAt)).slice(0, 16).replace("T", " ");
       result._ms = { read: readMs, total: Date.now() - t0 };
       return json({ ok: true, result });
+    }
+
+    if (fn === "sd_getSettings" || fn === "sd_getOpsSettings") {
+      const d: any = await rpc("settle_settings", { p_token: token });
+      if (!d) return json({ ok: false, error: "AUTH" }, 401);
+      if (d.forbidden) return json({ ok: false, error: "この操作は本部アカウントのみ実行できます" });
+      return json({ ok: true, result: fn === "sd_getOpsSettings" ? { ok: true, ...d.ops } : buildSettings(d, jst(new Date()).slice(0, 7)) });
     }
 
     const user: any = await rpc("settle_whoami", { p_token: token });
