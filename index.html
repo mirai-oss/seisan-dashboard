@@ -165,6 +165,12 @@
 .stale-bar{display:none;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:20;margin:8px 0;padding:10px 14px;border-radius:10px;background:#fff7e0;color:#7a5200;border:1px solid #f0d68a;font-size:13px;font-weight:700}
 .stale-bar.failed{background:#fdecec;color:#9b1c1c;border-color:#f3b4b4}
 body.sd-stale #view-input, body.sd-stale #view-settings, body.sd-stale #honbu-toolbar{pointer-events:none;opacity:.5}
+/* 二重計上の疑い（2026-11-26） */
+.dup-banner{display:none;margin:8px 0;padding:12px 14px;border-radius:10px;background:#fdecec;border:2px solid #dc2626;color:#7f1d1d;font-size:13px}
+.dup-title{font-size:15px;font-weight:800;margin-bottom:6px}
+.dup-item{padding:8px 0;border-top:1px solid #f3b4b4}
+.dup-row{margin:2px 0 2px 12px}
+.dup-badge{margin:8px 0;padding:8px 10px;border-radius:8px;background:#dc2626;color:#fff;font-weight:700;font-size:13px}
 </style>
 </head>
 <body>
@@ -234,6 +240,7 @@ body.sd-stale #view-input, body.sd-stale #view-settings, body.sd-stale #honbu-to
     <div class="sub" id="updated-at"></div>
   </header>
   <div class="stale-bar" id="stale-bar"><span id="stale-msg"></span><button class="btn sm" id="stale-retry" style="display:none" onclick="loadDashboard(state.month,true)">↻ もう一度取得</button></div>
+  <div class="dup-banner" id="dup-banner"></div>
 
   <div class="settle-shell">
     <div class="settle-log" id="settleLog">
@@ -931,6 +938,7 @@ function render(){
 
   var sel=document.getElementById('month-select');
   sel.innerHTML=d.months.map(function(mk){ return '<option value="'+mk+'"'+(mk===d.month?' selected':'')+'>'+mLabel(mk)+'</option>'; }).join('');
+  renderDupBanner_();
   renderKpis();
   renderCards();
   renderCorp();
@@ -1058,11 +1066,35 @@ function renderCards(){
       +'<button class="toggle" onclick="var p=document.getElementById(\'sdt-'+idx+'\');p.style.display=p.style.display===\'none\'?\'\':\'none\'">内訳 ▾</button></div>'
       +'<div id="sdt-'+idx+'" style="display:none">'+settleTable(st)+'</div>'
       +'<div class="settle-minigrid"><div class="settle-mini"><small>売上合計</small><b>'+yen(dt.sales)+'</b></div><div class="settle-mini"><small>経費合計</small><b>'+yen(se.costTotal)+'</b></div><div class="settle-mini"><small>明細</small><b>'+dt.count+'件</b></div></div>'
-      + missHtml + checkHtml + sentHtml + lockHtml + paidHtml
+      + dupBadge_(st) + missHtml + checkHtml + sentHtml + lockHtml + paidHtml
       +'<div class="settle-doc-actions">'+actions+'</div>'
       + sendline
       +'</div>';
   }).join('');
+}
+
+/* ===== 二重計上の疑い（2026-11-26） ===== */
+function renderDupBanner_(){
+  var el=document.getElementById('dup-banner'); if(!el) return;
+  var items=[];
+  (state.data.stores||[]).forEach(function(st){ (st.suspects||[]).forEach(function(g){ items.push({store:st.name,g:g}); }); });
+  el.style.display=items.length?'block':'none';
+  if(!items.length){ el.innerHTML=''; return; }
+  el.innerHTML='<div class="dup-title">⚠ 二重計上の疑いがあります（'+items.length+'件）。振込の前に確認してください</div>'
+    + items.map(function(it){
+        var months=[]; it.g.rows.forEach(function(r){ if(months.indexOf(r.month)<0) months.push(r.month); });
+        return '<div class="dup-item"><b>'+esc(it.store)+'</b>　'+esc(it.g.reason)
+          + it.g.rows.map(function(r){
+              return '<div class="dup-row">'+esc(mLabel(r.month))+(r.paid?'（振込済み）':'（未振込）')+'　'+esc(r.item)+'　'+yen(r.amount)+(r.note?'　<span class="muted">'+esc(r.note)+'</span>':'')+'</div>';
+            }).join('')
+          + months.map(function(m){ return '<button class="btn sm" onclick="loadDashboard(\''+esc(m)+'\')">'+esc(mLabel(m))+'を開く</button> '; }).join('')
+          +'</div>';
+      }).join('');
+}
+function dupBadge_(st){
+  var hit=(st.suspects||[]).filter(function(g){ return g.rows.some(function(r){ return r.month===state.data.month; }); });
+  if(!hit.length) return '';
+  return '<div class="dup-badge">⚠ この月に二重計上の疑い: '+hit.map(function(g){ return esc(g.rows[0].item)+' '+yen(g.rows[0].amount); }).join('、')+'（画面の上の赤い枠を確認）</div>';
 }
 
 /* ポイント売上は委託先へ入金されるため、精算書の売上には入れない。

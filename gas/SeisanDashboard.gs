@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.35-migrate2';
+var SD_VERSION = 'v5.36-dup';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -1656,6 +1656,34 @@ function sd_issuedMap_(det) {
   return out;
 }
 
+/* 二重計上の疑い（2026-11-26）。振込がまだの月がからむものだけを返す（本部・マスターの画面で目立たせる）。
+ *  ①同じ連携元の明細が2件以上 ②同じ請求書・同じ金額が別の月にも ③同じ月に同じ区分・費目・金額・税率が2件以上 */
+function sd_dupSuspects_(rows, isLocked) {
+  var groups = {};
+  function add(key, reason, r) { (groups[key] = groups[key] || { reason: reason, rows: [] }).rows.push(r); }
+  rows.forEach(function (r) {
+    if (r.ym < SD_START_MONTH || !Number(r.amount)) return;
+    var ref = String(r.extRef || '');
+    if (ref) add('ref|' + ref, '同じ連携元の明細が2件あります', r);
+    var m = ref.match(/^invoice:([^:]+):/);
+    if (m) add('inv|' + m[1] + '|' + r.amount, '同じ請求書・同じ金額が別の月にもあります', r);
+    add('same|' + r.ym + '|' + sd_norm_(r.kubun) + '|' + sd_norm_(r.item) + '|' + r.amount + '|' + sd_norm_(r.tax), '同じ月に同じ費目・同じ金額が2件以上あります', r);
+  });
+  var out = [], seen = {};
+  Object.keys(groups).forEach(function (k) {
+    var g = groups[k];
+    if (g.rows.length < 2) return;
+    if (k.indexOf('inv|') === 0 && g.rows.every(function (r) { return r.ym === g.rows[0].ym; })) return;
+    var id = g.rows.map(function (r) { return r.row; }).sort(function (a, b) { return a - b; }).join(',');
+    if (seen[id]) return;
+    seen[id] = true;
+    if (g.rows.every(function (r) { return isLocked(r.ym); })) return;
+    out.push({ reason: g.reason, rows: g.rows.slice().sort(function (a, b) { return a.ym < b.ym ? -1 : a.ym > b.ym ? 1 : a.row - b.row; })
+      .map(function (r) { return { month: r.ym, kubun: r.kubun, item: r.item, amount: r.amount, note: r.note || '', paid: isLocked(r.ym) }; }) });
+  });
+  return out;
+}
+
 function sd_missing_(byMonth, monthKey, required) {
   var curRows = byMonth[monthKey] || [];
   var cur = {}, curKubun = {};
@@ -1793,7 +1821,13 @@ function sd_buildDashboard_(user, monthKey, timer) {
       }
     }
 
+    var suspects = (user.role === '本部' || user.role === 'マスター') ? sd_dupSuspects_(rows, function (mk) {
+      var p = sd_paidStatusMap_(st.name, sd_clientInfoAt_(st, mk).client, paidAll)[mk];
+      return !!(p && p.done);
+    }) : [];
+
     return {
+      suspects: suspects,
       name: st.name, client: sd_clientInfoAt_(st, monthKey).client, rate: st.rate,
       fixed: fixed,
       dbSheet: st.db ? st.db.sheet : '', hasDb: !!st.db,
@@ -2326,8 +2360,20 @@ function sd_apiAddExternalLine(token, store, monthKey, line) {
     }
     sd_ensureCategoryCols_(st.db);
 
+    // 同じ明細が別の月にある場合（対象月を変えて登録し直した場合）は、古い月の行を残さない＝二重計上の防止（2026-11-26）。
+    // 古い月が振込済みなら、書き換えず追加もしない
+    var everyRow = sd_readRows_(st.db);
+    var oldMonths = [];
+    everyRow.forEach(function (r) {
+      if (r.ym !== monthKey && (r.extRef === sourceKey || (!r.extRef && r.note === legacyNoteTag)) && oldMonths.indexOf(r.ym) < 0) oldMonths.push(r.ym);
+    });
+    var lockedOld = oldMonths.filter(function (m) { return sd_isLocked_(store, m); });
+    if (lockedOld.length) {
+      return { ok: false, locked: true, error: 'この明細は ' + lockedOld.join('・') + '分（振込済み）に登録されています。二重計上を防ぐため、' + monthKey + '分には追加しません' };
+    }
+
     // 同じsourceKeyの行が既にあれば上書き（冪等）。「外部参照ID」列→見つからなければ旧形式（備考列）の順。
-    var allRows = sd_readRows_(st.db).filter(function (r) { return r.ym === monthKey; });
+    var allRows = everyRow.filter(function (r) { return r.ym === monthKey; });
     var rows = allRows.filter(function (r) { return r.extRef === sourceKey; });
     if (!rows.length) rows = allRows.filter(function (r) { return !r.extRef && r.note === legacyNoteTag; });
     var note = String(line.note || '');
@@ -2356,6 +2402,11 @@ function sd_apiAddExternalLine(token, store, monthKey, line) {
     }
   } finally {
     lock.releaseLock();
+  }
+
+  // 対象月を変えて登録し直した場合は、新しい月への登録が成功した後に、古い月の行を消す
+  if (result && result.ok && oldMonths.length) {
+    result.movedFrom = oldMonths.map(function (m) { return { month: m, cleanup: sd_removeExternalLine_(store, m, sourceKey) }; });
   }
 
   // 2026-09-05追加（対象店舗変更対応）: line.previousStoreが指定され今回のstoreと異なる場合、

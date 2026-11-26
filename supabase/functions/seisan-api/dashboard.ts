@@ -133,6 +133,32 @@ function missing(byMonth: Record<string, any[]>, month: string, required: string
   return { missing: out, catWarn };
 }
 
+export function dupSuspects(rows: any[], isLocked: (m: string) => boolean) {
+  const groups = new Map<string, { reason: string; rows: any[] }>();
+  const add = (key: string, reason: string, r: any) => { if (!groups.has(key)) groups.set(key, { reason, rows: [] }); groups.get(key)!.rows.push(r); };
+  for (const r of rows) {
+    const amount = Number(r.amount);
+    if (r.month < START_MONTH || !amount) continue;
+    const ref = String(r.ext_ref || '');
+    if (ref) add('ref|' + ref, '同じ連携元の明細が2件あります', r);
+    const m = ref.match(/^invoice:([^:]+):/);
+    if (m) add('inv|' + m[1] + '|' + amount, '同じ請求書・同じ金額が別の月にもあります', r);
+    add(['same', r.month, norm(r.kubun), norm(r.item), amount, norm(r.tax)].join('|'), '同じ月に同じ費目・同じ金額が2件以上あります', r);
+  }
+  const out: any[] = [], seen = new Set<string>();
+  for (const [k, g] of groups) {
+    if (g.rows.length < 2) continue;
+    if (k.startsWith('inv|') && g.rows.every((r) => r.month === g.rows[0].month)) continue;
+    const id = g.rows.map((r) => r.legacy_row).sort((a, b) => a - b).join(',');
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (g.rows.every((r) => isLocked(r.month))) continue;
+    out.push({ reason: g.reason, rows: [...g.rows].sort((a, b) => (a.month < b.month ? -1 : a.month > b.month ? 1 : a.legacy_row - b.legacy_row))
+      .map((r) => ({ month: r.month, kubun: r.kubun ?? '', item: r.item ?? '', amount: Number(r.amount), note: r.note ?? '', paid: isLocked(r.month) })) });
+  }
+  return out;
+}
+
 export function buildDashboard(data: Data, user: User, monthKey: string | null) {
   const thisMonth = data.thisMonth;
   let month = monthKey || addMonths(thisMonth, -1);
@@ -189,6 +215,7 @@ export function buildDashboard(data: Data, user: User, monthKey: string | null) 
     const client = clientAt(st, month, data.periods);
     clients.add(norm(client));
     return {
+      suspects: isHq ? dupSuspects(rows, (mk) => !!paidFor(mk)?.done) : [],
       name: st.name, client, rate: st.rate_text ?? '',
       fixed: {
         rent: Number(st.rent), ins: Number(st.insurance), sss: Number(st.accounting_fee), f4: Number(st.fixed4), f5: Number(st.fixed5),
