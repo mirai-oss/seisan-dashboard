@@ -947,7 +947,7 @@ function renderKpis(){
   d.stores.forEach(function(st){
     var dt=st.detail, se=dt.settle;
     if(dt.paid && dt.paid.done) paidCount++;
-    if(dt.salesCheck && dt.salesCheck.diff) diffCount++;
+    if(dt.salesCheck && salesRest_(dt.salesCheck)) diffCount++;
     missCount += (dt.missing?dt.missing.length:0) + (dt.catWarn?dt.catWarn.length:0);
     if(se.hasSales) transferSum += se.transfer;
   });
@@ -1065,17 +1065,30 @@ function renderCards(){
   }).join('');
 }
 
+/* ポイント売上は委託先へ入金されるため、精算書の売上には入れない。
+ * そのぶんを除いても残る差額（精算書 −（売上シート − ポイント））。ポイントが分からないときは差額そのもの。 */
+function salesRest_(sc){
+  if(!sc.diff || sc.point==null) return sc.diff;
+  return sc.diff + sc.point;
+}
+function signedYen_(n){ return (n>0?'＋':n<0?'−':'')+yen(Math.abs(n)); }
 /* 売上照合の表示（軽いアラート）。差額が出ても繰越等で正常なことがあるので指標として控えめに出す。 */
 function salesCheckHtml(sc){
   if(!sc) return '';
   var diff = sc.diff; // entered - source
+  var hasPt = sc.point!=null;
   if(diff===0){
-    return '<div class="settle-ok">✅ 売上照合 一致（売上シート '+yen(sc.source)+'）</div>';
+    return '<div class="settle-ok">✅ 売上照合 一致（売上シート '+yen(sc.source)+(hasPt&&sc.point?'・うちポイント '+yen(sc.point):'')+'）</div>';
+  }
+  if(hasPt && salesRest_(sc)===0){
+    return '<div class="settle-ok">✅ 売上照合 差額はポイント売上と一致（差額 '+signedYen_(diff)+'／ポイント売上 '+yen(sc.point)+'）'
+      +'<div class="muted" style="margin-top:2px">精算書 '+yen(sc.entered)+' ／ 売上シート '+yen(sc.source)+'</div></div>';
   }
   var absd = Math.abs(diff);
   var dir = diff>0 ? '精算書が多い' : '精算書が少ない（入力漏れの可能性）';
   var sign = diff>0 ? '＋' : '−';
   return '<div class="settle-alert"><b>⚠ 売上照合 差額 '+sign+yen(absd)+'</b>精算書 '+yen(sc.entered)+' ／ 売上シート '+yen(sc.source)+'（'+dir+'）'
+    +(hasPt ? '<div style="margin-top:4px">ポイント売上（委託先へ入金）'+yen(sc.point)+'<br>ポイントを除いた差額 '+signedYen_(salesRest_(sc))+'</div>' : '')
     +'<div class="muted" style="margin-top:2px">※ カード売上の翌月繰越などで差が出ることがあります。指標としてご確認ください。</div></div>';
 }
 

@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.32-paysums';
+var SD_VERSION = 'v5.33-point';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -1041,10 +1041,11 @@ function sd_snapSave_(token, user, data){
   } catch (e) { /* 写しの保存に失敗しても画面は出す */ }
 }
 /* ---------- 画面の写しの作り置き（2026-11-26） ----------
- * 1時間ごとに、直近の月の写しを作り直しておく（初めて開く月もすぐ出るようにする）。
+ * 2時間ごとに、直近の月の写しを作り直しておく（初めて開く月もすぐ出るようにする）。
+ * 1回あたり数分かかるため、GASの1日の実行時間の上限を考えて回数と月数を絞っている（2026-11-26）。
  * 有効な権限アカウントの「見える範囲」ごとに作る。画面の表示と同じ組み立て(sd_buildDashboard_)を使う。
  * 始める: エディタで sd_setupSnapWarm を1回実行。止める: sd_stopSnapWarm を実行。 */
-var SD_WARM_OFFSETS = [-1, 0, -2, -3];     // 前月（最初に開く月）→今月→2か月前→3か月前
+var SD_WARM_OFFSETS = [-1, 0, -2];         // 前月（最初に開く月）→今月→2か月前
 var SD_WARM_HOURS = { from: 7, to: 23 };   // この時間帯（日本時間）だけ動く
 var SD_WARM_LIMIT_MS = 270000;             // 1回の実行は4分半まで（GASの上限6分より前に切り上げる）
 function sd_warmUsers_(){
@@ -1094,8 +1095,8 @@ function sd_snapWarmTick(){
 }
 function sd_setupSnapWarm(){
   sd_stopSnapWarm();
-  ScriptApp.newTrigger('sd_snapWarmTick').timeBased().everyHours(1).create();
-  Logger.log('作り置きを1時間ごとに設定しました。続けて1回目を作ります');
+  ScriptApp.newTrigger('sd_snapWarmTick').timeBased().everyHours(2).create();
+  Logger.log('作り置きを2時間ごとに設定しました。続けて1回目を作ります');
   sd_snapWarmTick();
 }
 function sd_stopSnapWarm(){
@@ -1689,6 +1690,7 @@ function sd_buildDashboard_(user, monthKey, timer) {
       if (src != null) {
         salesCheck = {
           source: src,               // 売上シート S列 支払合計（実売上）
+          point: payMap['pt:' + sd_norm_(st.salesName)], // うちポイント売上（委託先へ入金されるため精算書の売上に含めない）
           entered: settle.sales,     // 精算書に入力された売上合計
           diff: settle.sales - src,  // ＋=精算書が多い ／ −=精算書が少ない（入力漏れの可能性）
           salesName: st.salesName
@@ -2804,7 +2806,10 @@ function sd_paySumsMulti_(ext, monthKeys) {
   var cStore = sd_colLetterToNum_(ext['売上_店舗名列'] || 'J');
   var cPay = sd_colLetterToNum_(ext['売上_支払合計列'] || 'S');
   var lastR = sh.getLastRow();
-  var width = Math.max(cDate, cStore, cPay);
+  // ポイント売上の列。見出しが「ポイント」でなければ使わない（列がずれたときに別の金額を出さないため）
+  var cPoint = sd_colLetterToNum_(ext['売上_ポイント列'] || 'U');
+  var hasPoint = cPoint <= sh.getLastColumn() && sd_norm_(sh.getRange(1, cPoint).getValue()) === 'ポイント';
+  var width = Math.max(cDate, cStore, cPay, hasPoint ? cPoint : 0);
   var out = {};
   monthKeys.forEach(function (mk) { out[mk] = {}; });
   var CHUNK = 5000;
@@ -2820,6 +2825,7 @@ function sd_paySumsMulti_(ext, monthKeys) {
       var nm = sd_norm_(vals[i][cStore - 1]);
       if (!nm) continue;
       sums[nm] = (sums[nm] || 0) + (Number(vals[i][cPay - 1]) || 0);
+      if (hasPoint) sums['pt:' + nm] = (sums['pt:' + nm] || 0) + (Number(vals[i][cPoint - 1]) || 0);
     }
   }
   monthKeys.forEach(function (mk) { Object.keys(out[mk]).forEach(function (k) { out[mk][k] = Math.round(out[mk][k]); }); });
@@ -2831,7 +2837,7 @@ function sd_loadPaySums_(ext, monthKeys) {
   var cache = CacheService.getScriptCache(), need = [];
   monthKeys.forEach(function (mk) {
     if (SD_ACTUAL_MEMO_[mk] !== undefined) return;
-    var hit = cache.get('sdpay2_' + mk);
+    var hit = cache.get('sdpay3_' + mk);
     if (hit) { try { SD_ACTUAL_MEMO_[mk] = JSON.parse(hit); return; } catch (e) { /* 読み直す */ } }
     if (need.indexOf(mk) < 0) need.push(mk);
   });
@@ -2839,7 +2845,7 @@ function sd_loadPaySums_(ext, monthKeys) {
   var all = ext['売上スプレッドシートID'] ? sd_paySumsMulti_(ext, need) : null;
   need.forEach(function (mk) {
     SD_ACTUAL_MEMO_[mk] = all ? all[mk] : null;
-    if (all) { try { cache.put('sdpay2_' + mk, JSON.stringify(all[mk]), 600); } catch (e) { /* 無視 */ } }
+    if (all) { try { cache.put('sdpay3_' + mk, JSON.stringify(all[mk]), 600); } catch (e) { /* 無視 */ } }
   });
 }
 
