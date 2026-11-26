@@ -550,7 +550,7 @@ function dbApi_(fn, args){
 function api(fn){
   if(DB_MODE){
     if(DB_FNS_.test(fn)) return dbApi_(fn, Array.prototype.slice.call(arguments,1));
-    var dbMsg='この操作は、試験表示ではまだ使えません。いつもの画面（URLに ?source=db が無いもの）で行ってください';
+    var dbMsg='この操作は、新しい仕組みでは使えません。必要な場合は担当にご連絡ください';
     toast('🧪 '+dbMsg);
     return Promise.reject(new Error(dbMsg));
   }
@@ -1157,7 +1157,7 @@ function renderCards(){
 
 /* 新しい仕組みでは使わない、スプレッドシート向けの操作を隠す */
 function hideSheetOnly_(){
-  Array.prototype.forEach.call(document.querySelectorAll('[onclick^="updateCheckSheet"],[onclick^="testChatwork"],[onclick^="openBulkCategorize"]'), function(b){
+  Array.prototype.forEach.call(document.querySelectorAll('[onclick^="writeCheckSheet"],[onclick^="testChatwork"],[onclick^="openBulkCategorize"]'), function(b){
     var card=b.closest&&b.closest('.settle-setting'); (card||b).style.display='none';
   });
   var link=document.getElementById('master-link'); if(link&&link.parentElement) link.parentElement.style.display='none';
