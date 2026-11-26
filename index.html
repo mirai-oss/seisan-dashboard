@@ -161,6 +161,10 @@
     .info-modalbox{width:100%;max-height:92vh}
     #login-view{margin:6vh auto 0;padding:22px 18px}
   }
+/* 画面の写しを表示している間の案内（2026-11-26） */
+.stale-bar{display:none;align-items:center;gap:10px;flex-wrap:wrap;position:sticky;top:0;z-index:20;margin:8px 0;padding:10px 14px;border-radius:10px;background:#fff7e0;color:#7a5200;border:1px solid #f0d68a;font-size:13px;font-weight:700}
+.stale-bar.failed{background:#fdecec;color:#9b1c1c;border-color:#f3b4b4}
+body.sd-stale #view-input, body.sd-stale #view-settings, body.sd-stale #honbu-toolbar{pointer-events:none;opacity:.5}
 </style>
 </head>
 <body>
@@ -229,6 +233,7 @@
     <a class="plain" id="sheet-link" href="#" target="_blank" rel="noopener" style="display:none">スプレッドシートを開く ↗</a>
     <div class="sub" id="updated-at"></div>
   </header>
+  <div class="stale-bar" id="stale-bar"><span id="stale-msg"></span><button class="btn sm" id="stale-retry" style="display:none" onclick="loadDashboard(state.month,true)">↻ もう一度取得</button></div>
 
   <div class="settle-shell">
     <div class="settle-log" id="settleLog">
@@ -512,7 +517,15 @@ function api(fn){
   }
   return attempt(0);
 }
+/* 画面の写し（前回のデータ）を表示している間は、読むだけの操作に限る。
+ * 古い行番号や金額のまま登録・修正・振込をしないようにするため。 */
+var STALE_SAFE_FN_=/^sd_(get|list|pdfPreview)/;
 function apiAuth(fn){
+  if(state.stale && !STALE_SAFE_FN_.test(fn)){
+    var msg='最新のデータを確認中です。上の案内が消えてから、もう一度お試しください';
+    toast('⏳ '+msg);
+    return Promise.reject(new Error(msg));
+  }
   var args=[fn, state.token].concat(Array.prototype.slice.call(arguments,1));
   return api.apply(null,args).catch(function(e){
     if(String(e.message||e).indexOf('AUTH')>-1){ showLogin('セッションが切れました。再ログインしてください'); throw new Error('再ログインが必要です'); }
@@ -602,7 +615,9 @@ function b64ToBlobUrl(b64, mime){
 
 /* ===== ログイン ===== */
 function showLogin(msg){
+  if(state.token) snapRpc_('sd_dash_logout', { p_token: state.token }).catch(function(){});
   state.token=''; localStorage.removeItem('sd_token');
+  state.data=null; loadSeq++; invalidateCache(); setStale_(false); loading(false); // 前の人の画面を残さない
   document.getElementById('app-view').style.display='none';
   document.getElementById('login-view').style.display='block';
   document.getElementById('login-err').textContent=msg||'';
@@ -791,13 +806,43 @@ function isMaster(){ return state.data && state.data.user.role==='マスター';
 /* 振込済みロック中かつマスター以外 → 編集不可 */
 function isLockedFor(st){ return !!(st && st.detail && st.detail.locked) && !isMaster(); }
 
+/* ===== 画面の写し（2026-11-26） =====
+ * 前回のデータをSupabaseからすぐ表示し、裏でGASから最新を取り直して差し替える。
+ * 写しが取れなくても、今までどおりGASの結果を待つだけ。止めたいときは SNAPSHOT_ENABLED=false。 */
+var SNAPSHOT_ENABLED=true;
+var SNAPSHOT_RPC_URL='https://uuvsxzhpxtghojoubjcc.supabase.co/rest/v1/rpc/';
+function snapRpc_(name, body){
+  return fetch(SNAPSHOT_RPC_URL+name, {
+    method:'POST', headers:{ apikey:PERF_LOG_ANON_KEY, 'Content-Type':'application/json' }, body:JSON.stringify(body)
+  }).then(function(r){ if(!r.ok) throw new Error('snapshot '+r.status); return r.status===204?null:r.json(); });
+}
+function setStale_(on, savedAt, failed){
+  state.stale=!!on;
+  document.body.classList.toggle('sd-stale', !!on);
+  var bar=document.getElementById('stale-bar');
+  if(!bar) return;
+  bar.style.display=on?'flex':'none';
+  bar.classList.toggle('failed', !!failed);
+  if(!on) return;
+  if(savedAt) state.staleAt=savedAt;
+  var t=new Date(state.staleAt);
+  var when=(t.getMonth()+1)+'/'+t.getDate()+' '+t.getHours()+':'+('0'+t.getMinutes()).slice(-2);
+  document.getElementById('stale-msg').textContent = failed
+    ? '⚠ 最新のデータを取得できませんでした。表示は '+when+' 時点です（登録や修正はできません）'
+    : '⏳ '+when+' 時点の内容を表示しています。最新を確認中です…（確認が終わるまで登録や修正はできません）';
+  document.getElementById('stale-retry').style.display=failed?'':'none';
+}
+
 var dashCache={};
 var dashCacheAt={}; // 月ごとの取得時刻（背景更新を間引く用・2026-10-20）
+var loadSeq=0;      // 後から始めた読み込みを、先の読み込みの結果で上書きしないための番号
 function loadDashboard(monthKey, force){
   var key=monthKey||'__default__';
+  var seq=++loadSeq;
   if(force) dashCache={}; // 書き込み後は全月キャッシュを破棄
   if(!force && dashCache[key]){
     // キャッシュ即表示（裏で最新も取得して差し替え）
+    setStale_(false); loading(false);
     state.data=dashCache[key]; state.month=dashCache[key].month; render();
     // 取得から45秒以内なら背景更新はしない（月を行き来するたびに重い取得を重ねない・2026-10-20）
     if(Date.now()-(dashCacheAt[key]||0)>45000) refreshInBackground(monthKey, key);
@@ -805,18 +850,39 @@ function loadDashboard(monthKey, force){
   }
   // 直前に修正/削除/登録などが計測中でなければ、この読み込み単体を1操作として計測する
   if(!perfOp) perfOpStart(force?'再読込':'画面読込');
+  if(state.stale) setStale_(true); // 取り直し中の案内に戻す（最新が届くまで解除しない）
   loading(true);
   var t0=performance.now();
+  var freshDone=false;
+  if(SNAPSHOT_ENABLED && !force && state.token){ // 書き込み直後(force)は古い写しを出さない
+    snapRpc_('sd_dash_get', { p_token: state.token, p_month: monthKey||null }).then(function(snap){
+      if(freshDone || seq!==loadSeq || !snap || !snap.data || !snap.data.stores) return;
+      state.data=snap.data; state.month=snap.data.month;
+      setStale_(true, snap.savedAt);
+      render();
+      loading(false);
+      logApiPerf_('snapshot', performance.now()-t0, true, '');
+    }).catch(function(){ /* 写しが取れなくても最新の取得を待つ */ });
+  }
   apiAuth('sd_getDashboard', monthKey||null).then(function(data){
+    freshDone=true;
     var rt=Math.round(performance.now()-t0);
     perfStep('再読込', data._ms?data._ms.total:null, rt, data._ms);
     perfOpEnd(); // ここで一連の操作（修正→再読込 等）の合計が確定する
     dashCache[key]=data; dashCache[data.month]=data; dashCacheAt[key]=dashCacheAt[data.month]=Date.now();
+    if(seq!==loadSeq) return; // もっと新しい読み込みがあるので、画面はそちらに任せる
+    setStale_(false);
     state.data=data; state.month=data.month;
     render();
     loading(false);
     prefetchAdjacentMonths_(data.month);
-  }).catch(function(e){ loading(false); perfOpEnd(); toast('読み込みエラー: '+(e.message||e)); });
+  }).catch(function(e){
+    freshDone=true; perfOpEnd();
+    if(seq!==loadSeq) return;
+    loading(false);
+    if(state.stale && state.token) setStale_(true, null, true);
+    toast('読み込みエラー: '+(e.message||e));
+  });
 }
 // A-p1b（2026-09-02・実装指示書 §2）: 前月・翌月ボタン（‹ ›）を押した瞬間は毎回未取得月なので
 // 従来はそこだけ「読み込み中」が出ていた。表示が終わった直後に裏で前後1ヶ月分をこっそり
@@ -843,7 +909,7 @@ function refreshInBackground(monthKey, key){
   apiAuth('sd_getDashboard', monthKey||null).then(function(data){
     dashCache[key]=data; dashCache[data.month]=data; dashCacheAt[key]=dashCacheAt[data.month]=Date.now();
     // 表示中の月がまだ同じなら差し替え
-    if(state.month===data.month){ state.data=data; render(); }
+    if(state.token && state.month===data.month){ setStale_(false); state.data=data; render(); }
   }).catch(function(){ /* 背景更新の失敗は無視 */ });
 }
 function invalidateCache(){ dashCache={}; dashCacheAt={}; }

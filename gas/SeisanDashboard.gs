@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.28-speed1';
+var SD_VERSION = 'v5.29-snapshot';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -1004,6 +1004,40 @@ function sd_sessionPut_(token, sess){
   var exp = new Date().getTime() + SD_TOKEN_HOURS * 3600 * 1000;
   sd_sessionStore_().setProperty('sdtok_' + token, JSON.stringify({ sess: sess, exp: exp }));  // 常に書く（フォールバック・安全網として維持）
   sd_sessionSupaPut_(token, sess, exp);   // ベストエフォートで複製
+  sd_snapSave_(token, sess, null);         // ログイン直後から「画面の写し」を読めるようにする
+}
+
+/* ---------- 画面の写し（2026-11-26） ----------
+ * ダッシュボードの表示データをSupabaseにも置き、次に開いたとき画面側がすぐ表示できるようにする。
+ * 正本は今までどおりスプレッドシート。保存に失敗しても本体の処理は止めない。
+ * 止めたいとき: スクリプトプロパティ DASH_SNAPSHOT に off を入れる。 */
+function sd_snapRpc_(fnName, body){
+  var h = sd_sessionSupaHeaders_(); if (!h) return false;
+  if (PropertiesService.getScriptProperties().getProperty('DASH_SNAPSHOT') === 'off') return false;
+  try {
+    var res = UrlFetchApp.fetch(h.url + '/rest/v1/rpc/' + fnName, {
+      method: 'post', headers: h.headers, muteHttpExceptions: true, payload: JSON.stringify(body)
+    });
+    return res.getResponseCode() < 300;
+  } catch (e) { return false; }
+}
+/* 見える範囲の鍵。sd_allowedStores_ と同じ考え方（権限が同じ・担当店舗が同じ人は同じ写しを見る） */
+function sd_snapScope_(user){
+  var all = user.role === '本部' || sd_norm_(user.storesRaw) === '全店' || !user.storesRaw;
+  var stores = all ? 'ALL' : String(user.storesRaw).split(/[,、，]/).map(function (s) { return sd_norm_(s); }).filter(String).sort().join(',');
+  return sd_sha256hex_(String(user.role) + '|' + stores);
+}
+function sd_snapSave_(token, user, data){
+  try {
+    var p = { token_hash: sd_sha256hex_(String(token)), scope_key: sd_snapScope_(user), user_name: String(user.name || ''), user_role: String(user.role || '') };
+    if (data) {
+      var copy = {};
+      Object.keys(data).forEach(function (k) { if (k !== '_ms' && k !== 'user') copy[k] = data[k]; });
+      p.month_key = data.month;
+      p.data = copy;
+    }
+    sd_snapRpc_('sd_dash_put', { p: p });
+  } catch (e) { /* 写しの保存に失敗しても画面は出す */ }
 }
 function sd_sessionGet_(token){
   if (sd_sessionBackend_() === 'supabase') {
@@ -1606,7 +1640,7 @@ function sd_getDashboard(token, monthKey) {
   });
 
   timer.mark('storesLoop（' + stores.length + '店舗）');
-  return {
+  var result = {
     ver: SD_VERSION,
     user: { name: user.name, role: user.role },
     month: monthKey,
@@ -1618,9 +1652,12 @@ function sd_getDashboard(token, monthKey) {
     taxOptions: SD_TAX_OPTIONS,
     accountOptions: SD_ACCOUNT_LIST, // A-9: 勘定科目の選択肢（明細を入力タブの科目列で使用）
     sheetUrl: user.role === '本部' ? ss.getUrl() : '',
-    updatedAt: Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd HH:mm'),
-    _ms: timer.breakdown()
+    updatedAt: Utilities.formatDate(new Date(), SD_TZ, 'yyyy-MM-dd HH:mm')
   };
+  sd_snapSave_(token, user, result);
+  timer.mark('snapshot');
+  result._ms = timer.breakdown();
+  return result;
 }
 
 /* ---------- API: 明細追加（本部のみ） ---------- */
@@ -3677,6 +3714,7 @@ function sd_saveAccount(token, acc) {
   ];
   if (row) sh.getRange(row, 1, 1, 7).setValues([rec]);
   else sh.appendRow(rec);
+  sd_snapRpc_('sd_dash_revoke_all', {}); // 権限が変わったので、画面の写しは作り直す
   return { ok: true, id: rec[0], updated: !!row };
 }
 
