@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.34-migrate1';
+var SD_VERSION = 'v5.35-migrate2';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -1128,6 +1128,8 @@ function sd_migrateData_(){
       required: st.required, dbSheet: st.db ? st.db.sheet : '', salesName: st.salesName, mail: sd_mailSettings_(det, st.name) });
   });
   var months = Object.keys(monthSet).sort();
+  var issued = sd_issuedMap_(det);
+  stores.forEach(function (s) { s.issued = issued[sd_norm_(s.name)] || {}; });
 
   var payments = [];
   var ps = sd_paidSheet_(), pl = ps.getLastRow();
@@ -1811,6 +1813,12 @@ function sd_buildDashboard_(user, monthKey, timer) {
   });
 
   timer.mark('storesLoop（' + stores.length + '店舗）');
+  // 振込先口座は、本部以外には自分の画面に出る委託先の分だけを返す（2026-11-26: 他社の分まで返していたのを修正）
+  if (user.role !== '本部' && user.role !== 'マスター') {
+    var own = {};
+    stores.forEach(function (s) { var k = sd_norm_(s.client); if (corps[k]) own[k] = corps[k]; });
+    corps = own;
+  }
   var result = {
     ver: SD_VERSION,
     user: { name: user.name, role: user.role },
