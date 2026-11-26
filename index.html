@@ -1448,6 +1448,21 @@ function attachCellHtml(files){
     return '<a class="plain" href="'+esc(f.url)+'" target="_blank" rel="noopener" title="'+esc(f.name)+'">📎</a>';
   }).join(' ');
 }
+/* 区分の並び順（2026-11-26 社長指定）: 売上 → 固定費（固定調整） → 固定ロイヤリティ → 変動費。
+ * 変動ロイヤリティ（参考の入力）は固定ロイヤリティの次。同じ区分の中は、入力した順のまま。 */
+var KUBUN_ORDER_=['売上','固定費','固定調整','固定ロイヤリティ','変動ロイヤリティ','変動費'];
+function kubunRank_(k){ var i=KUBUN_ORDER_.indexOf(normJ(k)); return i<0?KUBUN_ORDER_.length:i; }
+function sortByKubun_(list, kubunOf){
+  return list.map(function(x,i){ return {x:x,i:i,k:kubunRank_(kubunOf(x))}; })
+    .sort(function(a,b){ return a.k-b.k || a.i-b.i; }).map(function(o){ return o.x; });
+}
+/* 入力中の行も、区分を選ぶと自動で並び替える（入力した内容や選んだファイルはそのまま） */
+function sortEntryRows_(changed){
+  var wrap=document.getElementById('entry-rows');
+  sortByKubun_(Array.prototype.slice.call(wrap.children), function(el){ return el.querySelector('.f-kubun').value; })
+    .forEach(function(el){ wrap.appendChild(el); });
+  if(changed) changed.focus();
+}
 function renderExisting(){
   var st=currentStore(); if(!st) return;
   var mk=document.getElementById('in-month').value;
@@ -1462,7 +1477,10 @@ function renderExisting(){
   var rows=st.detail.rows;
   title.textContent=mLabel(mk)+' の入力済み明細（'+rows.length+'件）';
   function buildRows(files){
-    return rows.map(function(r,i){
+    // 表示だけ区分順にする。修正・削除ボタンには元の行番号(i)を渡す
+    var order = sortByKubun_(rows.map(function(r,i){ return i; }), function(i){ return rows[i].kubun; });
+    return order.map(function(i){
+      var r = rows[i];
       var locked = isLockedFor(st);
       var editBtn = r.row
         ? (locked
@@ -1607,7 +1625,7 @@ function addEntryRow(){
   var row=document.createElement('div');
   row.className='settle-form-row';
   var accOpts=(d.accountOptions||['対象外']).map(function(a){return '<option'+(a==='対象外'?' selected':'')+'>'+esc(a)+'</option>';}).join('');
-  row.innerHTML='<div><select class="f-kubun">'+d.kubunOptions.map(function(k){return '<option'+(k==='変動費'?' selected':'')+'>'+esc(k)+'</option>';}).join('')+'</select></div>'
+  row.innerHTML='<div><select class="f-kubun" onchange="sortEntryRows_(this)">'+d.kubunOptions.map(function(k){return '<option'+(k==='変動費'?' selected':'')+'>'+esc(k)+'</option>';}).join('')+'</select></div>'
     +'<div><input class="f-item" placeholder="例: ガス料金" onblur="suggestAccountForRow(this)"></div>'
     +'<div><select class="f-account">'+accOpts+'</select></div>'
     +'<div><input class="f-subaccount" placeholder="任意"></div>'
@@ -1617,6 +1635,7 @@ function addEntryRow(){
     +'<div class="settle-file"><input type="file" class="f-file"></div>'
     +'<button class="btn sm" title="行を削除" onclick="this.parentElement.remove()">×</button>';
   document.getElementById('entry-rows').appendChild(row);
+  sortEntryRows_();
 }
 /* 費目名を入力し終えたら、その店舗で前回選んだ科目（無ければキーワード推定）を自動セットする
  * （「既定値の自動提案」。ユーザーは選び直せる＝勝手に確定はしない）。 */
