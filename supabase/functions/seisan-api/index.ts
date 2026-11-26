@@ -8,6 +8,7 @@ import * as auth from "./auth.ts";
 import { buildSettings } from "./settings.ts";
 import * as files from "./files.ts";
 import * as issue from "./issue.ts";
+import * as jobs from "./jobs.ts";
 import { supaStore } from "./store.ts";
 
 const ORIGIN = "https://mirai-oss.github.io";
@@ -60,6 +61,27 @@ const PUBLIC: Record<string, (a: any[]) => Promise<unknown>> = {
 };
 
 class DbError extends auth.AppError {}
+
+// 毎日の定期処理（係のGASが朝に呼ぶ）。合言葉が合うときだけ。切り替え前は何もしない
+async function runDaily(secret: unknown) {
+  const want = Deno.env.get("SEISAN_WORKER_SECRET") ?? "";
+  if (want.length < 32 || (await auth.sha256hex(String(secret ?? ""))) !== (await auth.sha256hex(want))) throw new auth.AppError("unauthorized");
+  const today = jst(new Date()).slice(0, 10);
+  const data: any = await rpc("settle_system_data", {});
+  if (data.mode !== "live") return { ok: true, skipped: "切り替え前" };
+  const j = jobs.jobsFor(today), done: string[] = [];
+  if (j.prepare) {
+    const r: any = await rpc("settle_prepare_month", { actor: { name: "自動(毎月1日)", role: "マスター" }, p_month: j.prevMonth, p_skip_locked: true });
+    done.push("定期費目: " + r.results.join(" / "));
+  }
+  if (j.cash) {
+    const r: any = await rpc("settle_cash_apply", { actor: { name: "自動(毎月5日)", role: "本部" }, p_month: j.prevMonth, p_stores: null, p_skip_existing: true });
+    done.push("現金売上: " + r.results.join(" / "));
+  }
+  let slack = null;
+  if (j.remind) slack = jobs.remindMessage({ ...data, thisMonth: today.slice(0, 7) }, today);
+  return { ok: true, done, slack };
+}
 const actorOf = ({ token: _t, ...u }: auth.User) => u; // データベースの記録にトークンを残さない
 const bucket = () => db.storage.from("settle-files");
 const monthLabel = (m: string) => `${Number(m.slice(0, 4))}年${Number(m.slice(5, 7))}月`;
@@ -151,6 +173,10 @@ const AUTHED: Record<string, (u: auth.User, a: any[]) => Promise<unknown>> = {
   sd_approveAccess: (u, a) => auth.approveAccess(deps, u, a[0], a[1]),
   sd_rejectAccess: (u, a) => auth.rejectAccess(deps, u, a[0], a[1]),
   sd_saveAccount: (u, a) => auth.saveAccount(deps, u, a[0]),
+  sd_prepareMonth: (u, a) => rpc("settle_prepare_month", { actor: actorOf(u), p_month: a[0], p_skip_locked: u.role !== "マスター" }),
+  sd_cashPreview: (u, a) => rpc("settle_cash_preview", { actor: actorOf(u), p_month: a[0] }),
+  sd_cashApply: (u, a) => rpc("settle_cash_apply", { actor: actorOf(u), p_month: a[0], p_stores: Array.isArray(a[1]) ? a[1] : [], p_skip_existing: false }),
+  sd_setupAutoPrep: () => Promise.resolve({ ok: true, message: "自動処理は設定済みです（毎月1日 定期費目セット／毎月5日 現金売上取込／17日・20日以降 未処理の通知）" }),
   sd_uploadAttachment: async (u, a) => { // a = [{ store, month, kind, fileName, mimeType, b64, revised }]
     const p: any = a[0] ?? {};
     const t: any = await rpc("settle_file_target", { actor: actorOf(u), p_store: p.store, p_month: p.month });
@@ -185,6 +211,7 @@ Deno.serve(async (req: Request) => {
   const fn = String(body?.fn ?? ""), args: any[] = Array.isArray(body?.args) ? body.args : [];
   const t0 = Date.now();
   try {
+    if (fn === "sd_cronDaily") return json({ ok: true, result: await runDaily(args[0]) });
     if (Object.hasOwn(PUBLIC, fn)) return json({ ok: true, result: await PUBLIC[fn](args) });
     const READS = ["sd_getDashboard", "sd_getSettings", "sd_getOpsSettings", "sd_listAttachments", "sd_getPdfB64", "sd_pdfPreview"];
     if (!READS.includes(fn) && !Object.hasOwn(AUTHED, fn)) return json({ ok: false, error: "この機能は、移行の次の段階で使えるようになります" });

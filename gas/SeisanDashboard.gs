@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.39-worker';
+var SD_VERSION = 'v5.40-jobs';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -91,6 +91,8 @@ function sd_jsonOut_(obj) {
 
 function sd_handleApi_(fn, args) {
   if (SD_API_WHITELIST.indexOf(fn) < 0) return { ok: false, error: '許可されていない呼び出しです: ' + fn };
+  // 切り替え後は、書き込み先が2つにならないように、古い仕組みの操作はすべて断る（PDF・メールの係だけ動く）
+  if (fn !== 'sd_apiWorker' && sd_frozen_()) return { ok: false, error: '精算ダッシュボードは新しい仕組みに移りました。画面を再読み込みしてください（外部連携は呼び先の変更が必要です）' };
   var f = sd_apiFnMap_()[fn];
   try {
     var result = f.apply(null, args || []);
@@ -1143,15 +1145,8 @@ function sd_migrateData_(){
   // レジの月間売上（全店舗分）とポイント
   var salesMonths = months.filter(function (m) { return m <= thisM; });
   var sums = sd_paySumsMulti_(ext, salesMonths) || {};
-  var sales = [];
-  salesMonths.forEach(function (m) {
-    var map = sums[m] || {};
-    Object.keys(map).forEach(function (k) {
-      if (k.indexOf('pt:') === 0) return;
-      sales.push({ key: k, month: m, pay: map[k], point: map['pt:' + k] === undefined ? null : map['pt:' + k] });
-    });
-    SD_ACTUAL_MEMO_[m] = map; // 突き合わせの正解も、同じ時点のレジの値で計算する
-  });
+  var sales = sd_salesRows_(sums, salesMonths);
+  salesMonths.forEach(function (m) { SD_ACTUAL_MEMO_[m] = sums[m] || {}; }); // 突き合わせの正解も、同じ時点のレジの値で計算する
 
   // 今の計算結果（突き合わせの正解）
   var paidAll = sd_paidMap_(), expected = [];
@@ -1188,7 +1183,69 @@ function sd_migrateData_(){
   return { ver: SD_VERSION, thisMonth: thisM, stores: stores, lines: lines, periods: sd_periodRows_(), recurring: recurring,
     payments: payments, logs: logs, sales: sales, sheets: sheets, settings: settings, expected: expected, accounts: accounts, requests: requests };
 }
+function sd_salesRows_(sums, months){
+  var out = [];
+  months.forEach(function (m) {
+    var map = sums[m] || {};
+    Object.keys(map).forEach(function (k) {
+      if (/^(pt|cs|cd):/.test(k)) return;
+      out.push({ key: k, month: m, pay: map[k], point: map['pt:' + k] === undefined ? null : map['pt:' + k],
+        cash: map['cs:' + k] === undefined ? null : Math.round(map['cs:' + k]), cashDays: map['cd:' + k] || 0 });
+    });
+  });
+  return out;
+}
+
+/* ---------- 切り替え後の毎日の仕事（2026-11-26） ----------
+ * ①レジの月間売上（直近4か月）を Supabase へ入れる ②定期処理（定期費目・現金取込・未処理の通知の判断）を seisan-api に依頼する。
+ * 切り替え前は、②は何もしない。 */
+var SD_NEW_API = 'https://uuvsxzhpxtghojoubjcc.supabase.co/functions/v1/seisan-api';
+function sd_liveDaily(){
+  var h = sd_sessionSupaHeaders_(); if (!h) throw new Error('SUPABASE_URL / SUPABASE_SERVICE_KEY が未設定です');
+  var ext = sd_extConfig_(), thisM = sd_thisMonthKey_();
+  var months = [-3, -2, -1, 0].map(function (n) { return sd_addMonths_(thisM, n); }).filter(function (m) { return m >= SD_START_MONTH; });
+  var rows = sd_salesRows_(sd_paySumsMulti_(ext, months) || {}, months);
+  var problems = [];
+  if (rows.length) {
+    var r = UrlFetchApp.fetch(h.url + '/rest/v1/rpc/settle_sales_push', { method: 'post', headers: h.headers, muteHttpExceptions: true, payload: JSON.stringify({ p: rows }) });
+    if (r.getResponseCode() >= 300) problems.push('レジ売上の取り込みに失敗（' + r.getResponseCode() + '）');
+  } else problems.push('レジ売上が読めませんでした');
+  var secret = PropertiesService.getScriptProperties().getProperty('SEISAN_WORKER_SECRET');
+  var res = UrlFetchApp.fetch(SD_NEW_API, { method: 'post', contentType: 'text/plain', muteHttpExceptions: true, payload: JSON.stringify({ fn: 'sd_cronDaily', args: [secret] }) });
+  var out = {}; try { out = JSON.parse(res.getContentText()); } catch (e) { /* 下で失敗扱い */ }
+  if (!out.ok) problems.push('定期処理に失敗: ' + (out.error || res.getResponseCode()));
+  else if (out.result.slack) sd_notifySlack_(out.result.slack.text, out.result.slack.key, 'seisan_remind');
+  Logger.log('毎日の処理: 売上' + rows.length + '件／' + JSON.stringify(out.result || {}).slice(0, 500) + (problems.length ? '／⚠ ' + problems.join('、') : ''));
+  if (problems.length) sd_notifySlack_('⚠【精算ダッシュボード 毎日の処理】' + problems.join('、'), 'seisan_daily_error:' + sd_fmtMonth_(new Date()) + new Date().getDate(), 'seisan_error');
+}
+
+/* 切り替え（エディタから実行）。古い画面と古い自動処理を止め、毎日の処理を始める。シートのデータは消さない。
+ * 戻すときは sd_rollbackToSheet。 */
+var SD_OLD_TRIGGERS = ['sd_autoPrepTick', 'sd_cashAutoTick', 'sd_remindTick', 'sd_snapWarmTick', 'sd_migrateSync'];
+function sd_deleteTriggers_(names){
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (names.indexOf(t.getHandlerFunction()) > -1) ScriptApp.deleteTrigger(t); });
+}
+function sd_goLive(){
+  var secret = PropertiesService.getScriptProperties().getProperty('SEISAN_WORKER_SECRET');
+  if (!secret) throw new Error('SEISAN_WORKER_SECRET が未設定です');
+  PropertiesService.getScriptProperties().setProperty('SEISAN_FROZEN', 'on');
+  sd_deleteTriggers_(SD_OLD_TRIGGERS.concat(['sd_liveDaily']));
+  ScriptApp.newTrigger('sd_liveDaily').timeBased().everyDays(1).atHour(9).create();
+  Logger.log('切り替えました: 古い画面の操作を停止し、毎日9時の処理を設定しました');
+}
+function sd_rollbackToSheet(){
+  PropertiesService.getScriptProperties().deleteProperty('SEISAN_FROZEN');
+  sd_deleteTriggers_(['sd_liveDaily']);
+  ScriptApp.newTrigger('sd_autoPrepTick').timeBased().onMonthDay(1).atHour(9).create();
+  ScriptApp.newTrigger('sd_cashAutoTick').timeBased().onMonthDay(5).atHour(9).create();
+  ScriptApp.newTrigger('sd_remindTick').timeBased().everyDays(1).atHour(9).create();
+  Logger.log('スプレッドシートの仕組みに戻しました（画面の写しは sd_setupSnapWarm で再開）');
+}
+/* 切り替え後に古い仕組みで受け付けるのは、PDF・メールの係と、ログアウトに関係しないものだけ */
+function sd_frozen_(){ return PropertiesService.getScriptProperties().getProperty('SEISAN_FROZEN') === 'on'; }
+
 function sd_migrateSync(){
+  if (sd_frozen_()) throw new Error('切り替え後のため、取り込みはできません');
   var h = sd_sessionSupaHeaders_();
   if (!h) throw new Error('SUPABASE_URL / SUPABASE_SERVICE_KEY が未設定です');
   var t0 = Date.now();
@@ -3029,7 +3086,8 @@ function sd_paySumsMulti_(ext, monthKeys) {
   // ポイント売上の列。見出しが「ポイント」でなければ使わない（列がずれたときに別の金額を出さないため）
   var cPoint = sd_colLetterToNum_(ext['売上_ポイント列'] || 'U');
   var hasPoint = cPoint <= sh.getLastColumn() && sd_norm_(sh.getRange(1, cPoint).getValue()) === 'ポイント';
-  var width = Math.max(cDate, cStore, cPay, hasPoint ? cPoint : 0);
+  var cCash = sd_colLetterToNum_(ext['売上_現金列'] || 'T'); // 現金売上の取込用（新しい仕組みへ渡す）
+  var width = Math.max(cDate, cStore, cPay, hasPoint ? cPoint : 0, cCash);
   var out = {};
   monthKeys.forEach(function (mk) { out[mk] = {}; });
   var CHUNK = 5000;
@@ -3046,6 +3104,9 @@ function sd_paySumsMulti_(ext, monthKeys) {
       if (!nm) continue;
       sums[nm] = (sums[nm] || 0) + (Number(vals[i][cPay - 1]) || 0);
       if (hasPoint) sums['pt:' + nm] = (sums['pt:' + nm] || 0) + (Number(vals[i][cPoint - 1]) || 0);
+      var cash = Number(vals[i][cCash - 1]) || 0;
+      sums['cs:' + nm] = (sums['cs:' + nm] || 0) + cash;
+      sums['cd:' + nm] = (sums['cd:' + nm] || 0) + (cash !== 0 ? 1 : 0);
     }
   }
   monthKeys.forEach(function (mk) { Object.keys(out[mk]).forEach(function (k) { out[mk][k] = Math.round(out[mk][k]); }); });
@@ -3057,7 +3118,7 @@ function sd_loadPaySums_(ext, monthKeys) {
   var cache = CacheService.getScriptCache(), need = [];
   monthKeys.forEach(function (mk) {
     if (SD_ACTUAL_MEMO_[mk] !== undefined) return;
-    var hit = cache.get('sdpay3_' + mk);
+    var hit = cache.get('sdpay4_' + mk);
     if (hit) { try { SD_ACTUAL_MEMO_[mk] = JSON.parse(hit); return; } catch (e) { /* 読み直す */ } }
     if (need.indexOf(mk) < 0) need.push(mk);
   });
@@ -3065,7 +3126,7 @@ function sd_loadPaySums_(ext, monthKeys) {
   var all = ext['売上スプレッドシートID'] ? sd_paySumsMulti_(ext, need) : null;
   need.forEach(function (mk) {
     SD_ACTUAL_MEMO_[mk] = all ? all[mk] : null;
-    if (all) { try { cache.put('sdpay3_' + mk, JSON.stringify(all[mk]), 600); } catch (e) { /* 無視 */ } }
+    if (all) { try { cache.put('sdpay4_' + mk, JSON.stringify(all[mk]), 600); } catch (e) { /* 無視 */ } }
   });
 }
 
