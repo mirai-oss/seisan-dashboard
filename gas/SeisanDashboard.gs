@@ -17,7 +17,7 @@
  * ★ 初回は sd_authorize を一度実行して権限を承認してください。
  **********************************************************************/
 
-var SD_VERSION = 'v5.29-snapshot';
+var SD_VERSION = 'v5.30-rowscache';
 
 // 統合アカウント（N-Styleポータル / 日報Supabase）でのログイン用。
 // キーは公開用publishableキー（秘密情報ではない）。トークン検証はSupabase側で行う。
@@ -1377,7 +1377,9 @@ function sd_allowedStores_(user, cfg) {
  * 素通りしていたため、その店舗だけ毎回シートを丸ごと読み直して常に遅く
  * なっていた。ここでは複数キーに分割して保存することで上限を回避する。 */
 var SD_ROWS_CACHE_TTL = 600; // 秒
-var SD_ROWS_CACHE_CHUNK = 90000; // 1キーあたりの文字数（100KB上限に余裕を持たせる）
+// 上限100KBは「バイト数」。日本語は1文字3バイトなので、90000文字だと超えて保存に失敗し、
+// 明細が多い店舗だけ毎回シートを読み直していた（2026-11-26修正）。
+var SD_ROWS_CACHE_CHUNK = 30000; // 1キーあたりの文字数（全部日本語でも約90KB）
 
 function sd_readRowsCached_(db) {
   var cache = CacheService.getScriptCache();
