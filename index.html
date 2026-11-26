@@ -447,7 +447,7 @@ function saveToken_(t){ localStorage.setItem(DB_MODE?'sd_token_db':'sd_token', t
  * 受け口）。これによりportal側から精算ダッシュボードへ再訪問した際も既存のdashCache（月別
  * キャッシュ）がそのまま生きた状態で瞬時に表示できる（iframe自体を作り直さない前提）。 */
 var EMBED_MODE=false, PENDING_VIEW='';
-var NEW_SYSTEM=false; // 切り替えの日に true にする（新しい仕組みがいつもの画面になる）
+var NEW_SYSTEM=true; // 2026-11-26 22:19 切り替え（戻すときは false）
 var DB_MODE=false; // 画面のデータをSupabaseから読み書きする。切り替え前は ?source=db の試験表示だけ
 var SEISAN_VIEWS_=['check','corp','annual','input','settings'];
 try{
