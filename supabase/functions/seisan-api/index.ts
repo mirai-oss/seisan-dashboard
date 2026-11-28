@@ -10,6 +10,7 @@ import * as files from "./files.ts";
 import * as issue from "./issue.ts";
 import * as jobs from "./jobs.ts";
 import * as ext from "./ext.ts";
+import * as deposits from "./deposits.ts";
 import { supaStore } from "./store.ts";
 
 const ORIGIN = "https://mirai-oss.github.io";
@@ -321,10 +322,15 @@ Deno.serve(async (req: Request) => {
     if (fn === "sd_cronDaily") return json({ ok: true, result: await runDaily(args[0]) });
     if (Object.hasOwn(EXT, fn)) return json({ ok: true, result: await runExt(fn, args) });
     if (Object.hasOwn(PUBLIC, fn)) return json({ ok: true, result: await PUBLIC[fn](args) });
-    const READS = ["sd_getDashboard", "sd_getSettings", "sd_getOpsSettings", "sd_listAttachments", "sd_getPdfB64", "sd_pdfPreview"];
+    const READS = ["sd_getDashboard", "sd_getSettings", "sd_getOpsSettings", "sd_listAttachments", "sd_getPdfB64", "sd_pdfPreview", "sd_getDeposits"];
     if (!READS.includes(fn) && !Object.hasOwn(AUTHED, fn)) return json({ ok: false, error: "この機能は、移行の次の段階で使えるようになります" });
     const [token, ...rest] = args;
     if (typeof token !== "string" || token.length < 32) return json({ ok: false, error: "AUTH" }, 401);
+
+    if (fn === "sd_getDeposits") { // [トークン, 月]。委託先の入金タブ。判定は全てDB側（settle_client_deposits）。引数はこの2つだけ
+      const r = await deposits.getDeposits(body, args, rpc);
+      return json(r.body, r.status);
+    }
 
     if (fn === "sd_getDashboard") {
       const month = rest[0] ?? null;

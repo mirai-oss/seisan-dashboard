@@ -46,6 +46,18 @@
   .settle-tab{border:1px solid var(--line);background:#fff;border-radius:999px;padding:10px 16px;font-size:12px;font-weight:700;cursor:pointer;color:var(--ink)}
   .settle-tab.active{background:var(--s-blue);border-color:var(--s-blue);color:#fff}
   .settle-subpage{display:none}.settle-subpage.active{display:block}
+  /* 入金タブ（委託先向け・閲覧専用）。入金タブを開いている間は、月ごとの共通バーと本部の操作ボタンを隠す */
+  body.sd-dep-view .settle-monthbar,body.sd-dep-view #honbu-toolbar{display:none}
+  .dep-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .dep-bar select{border:1px solid var(--line);background:#fff;border-radius:10px;padding:9px 12px;font-size:14px;min-width:150px}
+  .dep-sum{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}
+  .dep-sum>div{background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+  .dep-sum b{display:block;font-size:20px;line-height:1.3}.dep-sum span{font-size:12px;color:var(--muted)}
+  .dep-table{width:100%;border-collapse:collapse}.dep-table th,.dep-table td{padding:11px 12px;border-bottom:1px solid var(--line);font-size:14px;text-align:left;white-space:nowrap}
+  .dep-table th{color:var(--muted);background:#faf8f5;font-size:12px}.dep-table td.num,.dep-table th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .dep-note{font-size:12px;color:var(--muted);padding:12px 14px;line-height:1.7}
+  .dep-msg{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px 16px;text-align:center;color:var(--muted)}
+  @media(max-width:640px){.dep-sum{grid-template-columns:1fr 1fr}.dep-sum>div:first-child{grid-column:1/-1}.dep-table th,.dep-table td{padding:9px 6px;font-size:12px}.dep-table .pill{font-size:11px;padding:3px 7px}.dep-bar select{flex:1;min-width:0}}
   .settle-monthbar{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
   .settle-monthleft,.settle-monthright{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   .settle-month{border:1px solid var(--line);background:#fff;border-radius:9px;padding:10px 14px;font-weight:800}
@@ -272,6 +284,7 @@ body.sd-stale #view-input, body.sd-stale #view-settings, body.sd-stale #honbu-to
       <button id="tab-check" class="settle-tab active" onclick="showView('check')">✅ 店舗チェック</button>
       <button id="tab-corp" class="settle-tab" onclick="showView('corp')">🏢 法人別・振込</button>
       <button id="tab-annual" class="settle-tab" onclick="showView('annual')">📊 年間推移</button>
+      <button id="tab-deposit" class="settle-tab" onclick="showView('deposit')" style="display:none">🏦 入金</button>
       <button id="tab-input" class="settle-tab" onclick="showView('input')" style="display:none">＋ 明細を入力</button>
       <button id="tab-settings" class="settle-tab" onclick="showView('settings')" style="display:none">⚙ 設定</button>
     </div>
@@ -326,6 +339,11 @@ body.sd-stale #view-input, body.sd-stale #view-settings, body.sd-stale #honbu-to
         <div class="settle-tablewrap"><table class="settle-year-table" id="annual-table"></table></div>
         <p class="muted" style="padding:10px 14px">売上が未入力の月は空欄です。行末は各店舗の年間合計、最下行は全店合計です。</p>
       </div>
+    </div>
+
+    <!-- 入金（委託先・閲覧専用。本部がスイッチを入れたアカウントにだけタブが出る） -->
+    <div id="view-deposit" class="settle-subpage">
+      <div id="dep-body"></div>
     </div>
 
     <!-- 明細を入力（本部のみ） -->
@@ -541,7 +559,7 @@ function apiOnce_(fn){
 var API_RETRY_DELAYS_MS = [1000,2000,4000,8000];
 /* 試験表示では、新しい窓口が対応した操作は Supabase へ送る（切り替えまで、書き込みは窓口が断る）。
  * まだ対応していない操作は、読むだけのものを除いて止める（試験画面から、今のデータを書き換えない） */
-var DB_FNS_=/^sd_(login|googleLogin|supaLogin|requestPasswordReset|resetPassword|requestAccessOptions|requestAccess|addRows|updateRow|deleteRow|bulkAdd|setPaid|listAccessRequests|approveAccess|rejectAccess|saveAccount|getSettings|getOpsSettings|saveTerms|deleteTerms|saveRecurring|saveMail|saveCorp|saveOpsSettings|listAttachments|uploadAttachment|deleteAttachment|getPdfB64|pdfPreview|issueAndSend|prepareMonth|cashPreview|cashApply|setupAutoPrep|suggestAccount)$/;
+var DB_FNS_=/^sd_(login|googleLogin|supaLogin|requestPasswordReset|resetPassword|requestAccessOptions|requestAccess|addRows|updateRow|deleteRow|bulkAdd|setPaid|listAccessRequests|approveAccess|rejectAccess|saveAccount|getSettings|getOpsSettings|saveTerms|deleteTerms|saveRecurring|saveMail|saveCorp|saveOpsSettings|listAttachments|uploadAttachment|deleteAttachment|getPdfB64|pdfPreview|issueAndSend|prepareMonth|cashPreview|cashApply|setupAutoPrep|suggestAccount|getDeposits)$/;
 function dbApi_(fn, args){
   return fetch(DB_API_URL, { method:'POST', headers:{ 'Content-Type':'application/json', apikey:PERF_LOG_ANON_KEY }, body:JSON.stringify({ fn:fn, args:args }) })
     .then(function(r){ return r.json(); })
@@ -852,7 +870,9 @@ function initGoogleLogin_(){
 
 /* ===== 表示 ===== */
 function showView(v){
-  ['check','corp','annual','input','settings'].forEach(function(k){
+  if(v==='deposit' && !depTabOn_()) v='check'; // 入金タブが使えないアカウントは開けない
+  document.body.classList.toggle('sd-dep-view', v==='deposit');
+  ['check','corp','annual','deposit','input','settings'].forEach(function(k){
     var vw=document.getElementById('view-'+k);
     if(vw) vw.classList.toggle('active', v===k);
     var tb=document.getElementById('tab-'+k);
@@ -860,6 +880,7 @@ function showView(v){
   });
   if(v==='annual') renderAnnual();
   if(v==='settings') loadSettings();
+  if(v==='deposit') depOpen_();
 }
 function shiftMonth(n){
   var p=state.month.split('-');
@@ -1008,6 +1029,90 @@ function refreshInBackground(monthKey, key){
 }
 function invalidateCache(){ dashCache={}; dashCacheAt={}; }
 
+
+/* ===== 入金タブ（委託先・閲覧専用・2026-11-28） =====
+ * 本部が、アカウントごとにスイッチを入れたときだけ使える。見えるのは、自店舗の入金日・入金額・件数だけ（摘要・口座・残高などは来ない）。
+ * 判定は全てサーバー側。ここは、取得できたときだけタブを出す（権限が無ければ、タブも出さない）。店舗や委託先を指定する入力口は無い。 */
+var dep={ okToken:'', probing:'', month:'', cache:{}, relogin:false, busy:false };
+function depTabOn_(){ return !!(state.token && dep.okToken===state.token && state.data && state.data.user.role==='委託先'); }
+function depSync_(){
+  var tb=document.getElementById('tab-deposit'); if(!tb) return;
+  var role=state.data&&state.data.user.role;
+  if(role!=='委託先'){ dep.okToken=''; }
+  tb.style.display=depTabOn_()?'':'none';
+  if(!depTabOn_() && document.getElementById('view-deposit').classList.contains('active')) showView('check');
+  if(role==='委託先' && state.token && dep.okToken!==state.token && dep.probing!==state.token) depProbe_();
+}
+function depThisMonth_(){ return new Date(Date.now()+9*3600*1000).toISOString().slice(0,7); }
+function depProbe_(){
+  var tk=state.token; dep.probing=tk;
+  apiAuth('sd_getDeposits', depThisMonth_()).then(function(r){
+    if(state.token!==tk) return;
+    dep.cache={}; dep.cache[r.month]=r; dep.month=r.month; dep.relogin=false; dep.okToken=tk; depSync_();
+  }).catch(function(e){
+    if(state.token!==tk) return;
+    if(String(e&&e.message||e).indexOf('DEPOSIT_RELOGIN')>-1){ dep.relogin=true; dep.okToken=tk; depSync_(); }
+    /* 権限なし・その他: タブは出さない（何も表示しない） */
+  });
+}
+function depYen_(n){ return '¥'+Number(n||0).toLocaleString('ja-JP'); }
+function depDate_(iso){ var p=iso.split('-'), d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2])); return (+p[1])+'/'+(+p[2])+'（'+'日月火水木金土'.charAt(d.getUTCDay())+'）'; }
+function depOpen_(){
+  var el=document.getElementById('dep-body');
+  if(dep.relogin){ depRenderMsg_('入金の表示は、安全のため、ログインから12時間以内の方だけご利用いただけます。もう一度ログインしてください。', true); return; }
+  var m=dep.month||depThisMonth_();
+  if(dep.cache[m]) depRender_(dep.cache[m]); else depLoad_(m);
+}
+function depRenderMsg_(msg, relogin){
+  document.getElementById('dep-body').innerHTML='<div class="dep-msg"><p style="margin:0 0 12px">'+esc(msg)+'</p>'+(relogin?'<button class="btn primary" onclick="logout()">もう一度ログインする</button>':'')+'</div>';
+}
+function depLoad_(m){
+  if(dep.busy) return; dep.busy=true;
+  document.getElementById('dep-body').innerHTML='<div class="dep-msg">読み込み中…</div>';
+  var tk=state.token;
+  apiAuth('sd_getDeposits', m).then(function(r){
+    dep.busy=false; if(state.token!==tk) return;
+    dep.cache[r.month]=r; dep.month=r.month; depRender_(r);
+  }).catch(function(e){
+    dep.busy=false; if(state.token!==tk) return;
+    var t=String(e&&e.message||e);
+    if(t.indexOf('DEPOSIT_RELOGIN')>-1){ dep.relogin=true; depRenderMsg_('入金の表示は、安全のため、ログインから12時間以内の方だけご利用いただけます。もう一度ログインしてください。', true); }
+    else if(t.indexOf('DEPOSIT_RATE')>-1) depRenderMsg_('短時間にアクセスが集中しました。しばらくしてから、もう一度お試しください。');
+    else if(t.indexOf('DEPOSIT_DENIED')>-1){ dep.okToken=''; depSync_(); }
+    else depRenderMsg_('入金を読み込めませんでした。少し時間をおいて、もう一度お試しください。');
+  });
+}
+function depGo_(m){ dep.month=m; if(dep.cache[m]) depRender_(dep.cache[m]); else depLoad_(m); }
+function depRender_(r){
+  var months=r.months||[], i=months.indexOf(r.month);
+  var opts=months.map(function(k){ return '<option value="'+esc(k)+'"'+(k===r.month?' selected':'')+'>'+esc(mLabel(k))+'</option>'; }).join('');
+  var older=i>=0&&i<months.length-1?months[i+1]:'', newer=i>0?months[i-1]:'';
+  var rows=r.rows||[], total=0, cnt=0;
+  rows.forEach(function(x){ total+=x.amount; cnt+=x.count; });
+  var html='<div class="dep-bar"><button class="btn" '+(older?'onclick="depGo_(\''+esc(older)+'\')"':'disabled')+' title="前の月">‹</button>'
+    +'<select onchange="depGo_(this.value)">'+opts+'</select>'
+    +'<button class="btn" '+(newer?'onclick="depGo_(\''+esc(newer)+'\')"':'disabled')+' title="次の月">›</button>'
+    +'<button class="btn" onclick="dep.cache={};depLoad_(dep.month)">↻ 再読込</button></div>';
+  if(!(r.stores||[]).length){
+    html+='<div class="dep-msg">担当店舗が設定されていません。本部にご連絡ください。</div>';
+  } else {
+    html+='<div class="dep-sum"><div><span>'+esc(mLabel(r.month))+'の入金合計</span><b>'+depYen_(total)+'</b></div><div><span>入金件数</span><b>'+cnt+'件</b></div><div><span>対象店舗</span><b>'+r.stores.length+'店舗</b></div></div>';
+    if(!rows.length){
+      html+='<div class="dep-msg">この月の入金はありません。</div>';
+    } else {
+      html+='<div class="settle-yearcard"><div class="settle-tablewrap"><table class="dep-table"><tr><th>入金日</th><th>店舗</th><th class="num">入金額</th><th class="num">件数</th><th>状態</th></tr>'
+        +rows.map(function(x){
+          var chk=x.status==='checking';
+          return '<tr><td>'+esc(depDate_(x.date))+'</td><td>'+esc(x.store)+'</td><td class="num">'+(x.count>0?depYen_(x.amount):'—')+'</td><td class="num">'+(x.count>0?x.count+'件':'—')+'</td><td>'
+            +(chk?'<span class="pill amber">確認中あり</span>':'<span class="pill green">入金あり</span>')+'</td></tr>';
+        }).join('')+'</table></div>'
+        +'<div class="dep-note">※ 「確認中あり」の日は、銀行との照合が済んでいない入金が別にあります。その分は、照合が済むまで金額・件数に含まれません。<br>※ 閲覧専用です。この画面の内容は、銀行の入金を日ごとに集計したものです。</div></div>';
+    }
+  }
+  if(r.asOf){ var t=new Date(r.asOf); if(!isNaN(t)) html+='<p class="muted" style="margin-top:8px">データ更新: '+(t.getMonth()+1)+'/'+t.getDate()+' '+t.getHours()+':'+('0'+t.getMinutes()).slice(-2)+' 時点</p>'; }
+  document.getElementById('dep-body').innerHTML=html;
+}
+
 function render(){
   var d=state.data, honbu=isHonbu();
   document.getElementById('whoami').textContent = (d.user.role==='マスター'?'👑 ':'')+d.user.name+'（'+d.user.role+'）';
@@ -1033,6 +1138,7 @@ function render(){
   renderMatrix();
   if(document.getElementById('view-annual').classList.contains('active')) renderAnnual();
   if(honbu) renderInputView();
+  depSync_();
 }
 
 /* ---- 店舗チェックタブ冒頭のKPIサマリー（モックの.settle-summary。フロント側で集計するだけ・新規バックエンド不要） ---- */
