@@ -198,7 +198,7 @@ body.sd-stale #view-input, body.sd-stale #view-settings, body.sd-stale #honbu-to
   <h1>📋 精算ダッシュボード</h1>
   <p>ログインしてください（アカウントは本部が発行します）</p>
   <div id="login-err"></div>
-  <label>ログインID</label>
+  <label>ログインID または メールアドレス</label>
   <input id="login-id" autocomplete="username">
   <label>パスワード</label>
   <input id="login-pw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
@@ -685,7 +685,14 @@ function doLogin(){
   var pw=document.getElementById('login-pw').value;
   if(!id||!pw){ document.getElementById('login-err').textContent='IDとパスワードを入れてください'; return; }
   loading(true,'ログイン中…');
-  api('sd_login', id, pw).then(function(res){
+  // 2026-11-28: メールアドレスを入れた場合は、先にポータル（統合アカウント）として確認し、違えば精算ダッシュボードのパスワードで確認する
+  var viaPortal = id.indexOf('@')>-1
+    ? fetch(SSO_SUPA_URL+'/auth/v1/token?grant_type=password',{ method:'POST', headers:{apikey:SSO_SUPA_KEY,'Content-Type':'application/json'}, body:JSON.stringify({email:id,password:pw}) })
+        .then(function(r){ return r.ok?r.json():null; })
+        .then(function(j){ return j&&j.access_token ? api('sd_supaLogin', j.access_token).catch(function(){ return null; }) : null; })
+        .catch(function(){ return null; })
+    : Promise.resolve(null);
+  viaPortal.then(function(p){ return p || api('sd_login', id, pw); }).then(function(res){
     state.token=res.token;
     saveToken_(res.token);
     loading(false);

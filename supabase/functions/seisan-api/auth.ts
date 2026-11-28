@@ -80,8 +80,13 @@ export async function login(d: Deps, id: unknown, pw: unknown) {
     await d.store.log('ログイン', String(id), '制限中');
     fail('ログインに続けて失敗したため、しばらく時間をおいてからお試しください（パスワードを忘れた場合は「パスワードを忘れた方」から再設定できます）');
   }
-  const a = byId(await d.store.accounts(), id);
-  if (!a || !a.enabled || !(await verifyPassword(a.pw_hash, String(pw ?? '')))) {
+  // 2026-11-28: ログインIDのほか、登録しているメールアドレスでも入れる（同じメールが複数ある場合は、パスワードが合うアカウント）
+  const list = await d.store.accounts();
+  const named = byId(list, id);
+  const cands = named ? [named] : String(id ?? '').includes('@') ? list.filter((x) => lower(x.email) === lower(id)) : [];
+  let a: Account | undefined;
+  for (const x of cands) if (x.enabled && (await verifyPassword(x.pw_hash, String(pw ?? '')))) { a = x; break; }
+  if (!a) {
     await d.store.addFail(key);
     await d.store.log('ログイン', String(id), '失敗');
     fail('IDまたはパスワードが違います');
