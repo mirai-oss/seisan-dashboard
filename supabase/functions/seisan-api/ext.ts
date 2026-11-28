@@ -64,6 +64,8 @@ export function transferEx(d: any, store: string, month: string, thisMonth: stri
   return { found: true, hasSales: true, paid: true, transferEx: s.transferEx, transfer: s.transfer };
 }
 
+// 貸借対照表の科目（ns-portal の _shared/pl-guard.ts と同じ決まり）
+const BS_ACCOUNT = /^(小口現金|現金|(普通|当座|定期|通知)?預金|受取手形|売掛金|支払手形|買掛金|未払金|未払費用|未払消費税等?|未払法人税等|未収入金|未収金|未収収益|(長期)?前払費用|前払金|前渡金|前受金|前受収益|仮払金|仮払消費税等?|仮受金|仮受消費税等?|預り金|預り保証金|立替金|(短期|長期|役員)?貸付金|(短期|長期|役員)?借入金|(差入)?保証金|敷金|出資金|投資有価証券|建物(附属設備|付属設備)?|構築物|機械装置|車両運搬具|工具器具備品|土地|ソフトウェア(仮勘定)?|資本金|繰越利益剰余金|事業主貸|事業主借|創立費|開業費|商品|貯蔵品)$/;
 export function categorizedLines(d: any, store: string, month: string) {
   const st = d.stores.find((s: any) => s.name === store);
   if (!st) return { found: false, reason: '店舗マスタに「' + store + '」という名前が見つかりません' };
@@ -75,6 +77,7 @@ export function categorizedLines(d: any, store: string, month: string) {
   for (const r of rows) {
     const account = t(r.account);
     if (!account || account === '対象外' || account === '運営委託費') continue;
+    if (BS_ACCOUNT.test(account.normalize('NFKC').split('/')[0].trim())) continue; // 2026-11-28 社長指示: 貸借の科目（前払費用など）はPLに反映しない
     if (t(r.kubun) === '売上' || account === '売上高' || account === 'その他売上') continue;
     const key = account + '\t' + t(r.sub_account);
     agg.set(key, (agg.get(key) || 0) + (Number(r.amount) || 0) / (rate[norm(r.tax)] || 1.1));
